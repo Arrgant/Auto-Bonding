@@ -1,0 +1,29 @@
+# Auto-Bonding Dependencies
+
+# 核心建模
+cadquery>=2.4.0
+
+# DXF 解析
+ezdxf>=1.1.0
+
+# GUI 框架
+PyQt6>=6.6.0
+
+# 3D 预览
+vtk>=9.2.0
+
+# 数据处理
+numpy>=1.24.0
+pandas>=2.0.0
+
+# 测试
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# 打包
+pyinstaller>=6.0.0
+
+# 开发工具
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.0.0
