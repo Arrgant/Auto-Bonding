@@ -1,0 +1,8 @@
+# Backend Dependencies
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+pydantic>=2.0.0
+
+# 核心依赖
+-e ..  # 引用父目录的 bonding_converter
