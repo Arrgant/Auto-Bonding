@@ -24,22 +24,32 @@ app = FastAPI(
 
 # CORS 配置
 # 生产环境应改为具体域名
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+ALLOWED_ORIGINS_STR = os.getenv("ALLOWED_ORIGINS", "*")
+ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS_STR.split(",") if origin.strip()]
+
+# 安全配置
+ALLOW_CREDENTIALS = os.getenv("ALLOW_CREDENTIALS", "true").lower() == "true"
+ALLOWED_METHODS = os.getenv("ALLOWED_METHODS", "GET,POST,PUT,DELETE,OPTIONS").split(",")
+ALLOWED_HEADERS = os.getenv("ALLOWED_HEADERS", "Content-Type,Authorization").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS if ALLOWED_ORIGINS != ["*"] else ["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS if ALLOWED_ORIGINS and ALLOWED_ORIGINS != ["*"] else ["*"],
+    allow_credentials=ALLOW_CREDENTIALS,
+    allow_methods=ALLOWED_METHODS,
+    allow_headers=ALLOWED_HEADERS,
 )
 
 # 临时文件存储目录
-TEMP_DIR = Path(tempfile.gettempdir()) / "auto-bonding"
+TEMP_DIR = Path(os.getenv("TEMP_DIR", tempfile.gettempdir())) / "auto-bonding"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 # 文件保留时间（秒）
 FILE_RETENTION_SECONDS = int(os.getenv("FILE_RETENTION_SECONDS", "3600"))
+
+# 上传限制
+MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE", "50"))
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
 
 class ConversionConfig(BaseModel):
@@ -132,12 +142,14 @@ async def convert_file(
     if not file.filename.lower().endswith('.dxf'):
         raise HTTPException(status_code=400, detail="仅支持 DXF 文件")
     
-    # 检查文件大小（最大 50MB）
-    file_size = 0
+    # 检查文件大小
     content = await file.read()
     file_size = len(content)
-    if file_size > 50 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="文件大小不能超过 50MB")
+    if file_size > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"文件大小不能超过 {MAX_UPLOAD_SIZE_MB}MB"
+        )
     
     config = config or ConversionConfig()
     
@@ -224,11 +236,11 @@ async def convert_batch(
             content = await file.read()
             
             # 检查文件大小
-            if len(content) > 50 * 1024 * 1024:
+            if len(content) > MAX_UPLOAD_SIZE_BYTES:
                 results.append(BatchResultItem(
                     filename=file.filename,
                     success=False,
-                    message="文件大小不能超过 50MB"
+                    message=f"文件大小不能超过 {MAX_UPLOAD_SIZE_MB}MB"
                 ))
                 continue
             
