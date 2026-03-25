@@ -33,7 +33,7 @@ export default function ConversionConfig() {
 
   const onSubmit = async () => {
     if (files.length === 0) {
-      toast.warning('请先选择文件')
+      toast('请先选择文件')
       return
     }
 

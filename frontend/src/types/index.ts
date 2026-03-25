@@ -87,3 +87,51 @@ export interface BatchConversionResult {
     message: string;
   }>;
 }
+
+// DXF 文件（新界面用）
+export interface DXFFile {
+  id: string;
+  name: string;
+  size: number;
+  status: 'pending' | 'converting' | 'completed' | 'error';
+  progress: number;
+  uploadedAt: Date;
+}
+
+// 转换参数
+export interface ConvertParams {
+  arcHeight: number;
+  wireDiameter: number;
+  material: string;
+  outputFormat: string;
+}
+
+// 转换任务（新界面用）
+export interface ConvertTask {
+  id: string;
+  file: DXFFile;
+  params: ConvertParams;
+  status: 'queued' | 'processing' | 'completed' | 'error';
+  progress: number;
+  createdAt: Date;
+}
+
+// DRC 结果
+export interface DRCResult {
+  id: string;
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  location?: {
+    x: number;
+    y: number;
+  };
+}
+
+// 焊点坐标
+export interface BondingCoordinate {
+  x: number;
+  y: number;
+  z: number;
+  type: 'ball' | 'wedge' | 'stitch';
+  index: number;
+}

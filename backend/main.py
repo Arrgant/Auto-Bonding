@@ -4,12 +4,14 @@ Auto-Bonding FastAPI 后端
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import tempfile
 import os
+import shutil
 from pathlib import Path
+import uuid
 
 from bonding_converter import BondingDiagramConverter, DXFParser, CoordinateExporter
 from bonding_converter.drc import DRCChecker
@@ -17,17 +19,27 @@ from bonding_converter.drc import DRCChecker
 app = FastAPI(
     title="Auto-Bonding API",
     description="键合图转换服务",
-    version="0.1.0"
+    version="0.2.0"
 )
 
-# CORS 配置（允许 Lovable 前端调用）
+# CORS 配置
+# 生产环境应改为具体域名
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产环境改为 Lovable 的域名
+    allow_origins=ALLOWED_ORIGINS if ALLOWED_ORIGINS != ["*"] else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 临时文件存储目录
+TEMP_DIR = Path(tempfile.gettempdir()) / "auto-bonding"
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+# 文件保留时间（秒）
+FILE_RETENTION_SECONDS = int(os.getenv("FILE_RETENTION_SECONDS", "3600"))
 
 
 class ConversionConfig(BaseModel):
@@ -49,8 +61,26 @@ class ConversionResponse(BaseModel):
     """转换响应"""
     success: bool
     message: str
-    file_url: Optional[str] = None
+    file_id: Optional[str] = None
+    download_url: Optional[str] = None
     drc_report: Optional[dict] = None
+
+
+class BatchResultItem(BaseModel):
+    """批量转换结果项"""
+    filename: str
+    success: bool
+    message: str
+    file_id: Optional[str] = None
+    download_url: Optional[str] = None
+
+
+class BatchConversionResponse(BaseModel):
+    """批量转换响应"""
+    total: int
+    success_count: int
+    failed_count: int
+    results: List[BatchResultItem]
 
 
 @app.get("/")
@@ -58,7 +88,7 @@ def root():
     """API 根路径"""
     return {
         "name": "Auto-Bonding API",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "status": "running"
     }
 
@@ -67,6 +97,25 @@ def root():
 def health_check():
     """健康检查"""
     return {"status": "healthy"}
+
+
+def _generate_file_id() -> str:
+    """生成唯一文件 ID"""
+    return str(uuid.uuid4())
+
+
+def _cleanup_old_files():
+    """清理过期文件"""
+    import time
+    current_time = time.time()
+    for file_path in TEMP_DIR.glob("*"):
+        if file_path.is_file():
+            file_age = current_time - file_path.stat().st_mtime
+            if file_age > FILE_RETENTION_SECONDS:
+                try:
+                    file_path.unlink()
+                except Exception:
+                    pass
 
 
 @app.post("/convert", response_model=ConversionResponse)
@@ -83,18 +132,24 @@ async def convert_file(
     if not file.filename.lower().endswith('.dxf'):
         raise HTTPException(status_code=400, detail="仅支持 DXF 文件")
     
+    # 检查文件大小（最大 50MB）
+    file_size = 0
+    content = await file.read()
+    file_size = len(content)
+    if file_size > 50 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件大小不能超过 50MB")
+    
     config = config or ConversionConfig()
     
     try:
         # 保存上传文件
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.dxf') as tmp:
-            content = await file.read()
-            tmp.write(content)
-            tmp_path = tmp.name
+        input_file_id = _generate_file_id()
+        input_path = TEMP_DIR / f"{input_file_id}_input.dxf"
+        input_path.write_bytes(content)
         
         # 解析 DXF
         parser = DXFParser()
-        elements = parser.parse_file(tmp_path)
+        elements = parser.parse_file(str(input_path))
         
         if not elements:
             raise HTTPException(status_code=400, detail="未解析到键合图元素")
@@ -112,62 +167,146 @@ async def convert_file(
         output_format = config.export_format.lower()
         output_ext = 'step' if output_format == 'step' else output_format
         
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{output_ext}') as tmp:
-            output_path = tmp.name
+        output_file_id = _generate_file_id()
+        output_filename = f"{output_file_id}_output.{output_ext}"
+        output_path = TEMP_DIR / output_filename
         
         if config.export_format == 'STEP':
-            converter.export_step(assembly, output_path)
+            converter.export_step(assembly, str(output_path))
         else:
             exporter = CoordinateExporter()
-            exporter.export(assembly, output_path, config.export_format)
+            exporter.export(assembly, str(output_path), config.export_format)
         
-        # 生成下载 URL（实际部署时改为云存储）
-        file_url = f"/download/{Path(output_path).name}"
+        # 清理输入文件
+        try:
+            input_path.unlink()
+        except Exception:
+            pass
+        
+        # 生成下载 URL
+        download_url = f"/download/{output_filename}"
         
         return ConversionResponse(
             success=True,
             message=f"成功转换 {len(elements)} 个元素",
-            file_url=file_url
+            file_id=output_file_id,
+            download_url=download_url
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
-    finally:
-        # 清理临时文件
-        if 'tmp_path' in locals() and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        raise HTTPException(status_code=500, detail=f"转换失败：{str(e)}")
 
 
-@app.post("/convert/batch")
+@app.post("/convert/batch", response_model=BatchConversionResponse)
 async def convert_batch(
     files: List[UploadFile] = File(...),
     config: ConversionConfig = None
 ):
     """批量转换"""
+    config = config or ConversionConfig()
     results = []
+    success_count = 0
     
     for file in files:
         try:
-            # 调用单个转换逻辑
-            # TODO: 实现批量处理
-            results.append({
-                "filename": file.filename,
-                "success": True,
-                "message": "转换成功"
+            # 验证文件
+            if not file.filename.lower().endswith('.dxf'):
+                results.append(BatchResultItem(
+                    filename=file.filename,
+                    success=False,
+                    message="仅支持 DXF 文件"
+                ))
+                continue
+            
+            # 读取文件内容
+            content = await file.read()
+            
+            # 检查文件大小
+            if len(content) > 50 * 1024 * 1024:
+                results.append(BatchResultItem(
+                    filename=file.filename,
+                    success=False,
+                    message="文件大小不能超过 50MB"
+                ))
+                continue
+            
+            # 保存临时文件
+            input_file_id = _generate_file_id()
+            input_path = TEMP_DIR / f"{input_file_id}_input.dxf"
+            input_path.write_bytes(content)
+            
+            # 解析 DXF
+            parser = DXFParser()
+            elements = parser.parse_file(str(input_path))
+            
+            if not elements:
+                results.append(BatchResultItem(
+                    filename=file.filename,
+                    success=False,
+                    message="未解析到键合图元素"
+                ))
+                try:
+                    input_path.unlink()
+                except Exception:
+                    pass
+                continue
+            
+            # 转换为 3D
+            converter = BondingDiagramConverter({
+                'loop_height_coefficient': config.loop_height_coefficient,
+                'default_wire_diameter': config.default_wire_diameter,
+                'default_material': config.default_material,
             })
+            
+            assembly = converter.convert_elements(elements)
+            
+            # 导出文件
+            output_format = config.export_format.lower()
+            output_ext = 'step' if output_format == 'step' else output_format
+            
+            output_file_id = _generate_file_id()
+            output_filename = f"{output_file_id}_output.{output_ext}"
+            output_path = TEMP_DIR / output_filename
+            
+            if config.export_format == 'STEP':
+                converter.export_step(assembly, str(output_path))
+            else:
+                exporter = CoordinateExporter()
+                exporter.export(assembly, str(output_path), config.export_format)
+            
+            # 清理输入文件
+            try:
+                input_path.unlink()
+            except Exception:
+                pass
+            
+            results.append(BatchResultItem(
+                filename=file.filename,
+                success=True,
+                message=f"成功转换 {len(elements)} 个元素",
+                file_id=output_file_id,
+                download_url=f"/download/{output_filename}"
+            ))
+            success_count += 1
+            
         except Exception as e:
-            results.append({
-                "filename": file.filename,
-                "success": False,
-                "message": str(e)
-            })
+            results.append(BatchResultItem(
+                filename=file.filename,
+                success=False,
+                message=str(e)
+            ))
     
-    return {
-        "total": len(files),
-        "success": sum(1 for r in results if r['success']),
-        "results": results
-    }
+    # 清理过期文件
+    _cleanup_old_files()
+    
+    return BatchConversionResponse(
+        total=len(files),
+        success_count=success_count,
+        failed_count=len(files) - success_count,
+        results=results
+    )
 
 
 @app.post("/drc")
@@ -179,15 +318,19 @@ async def run_drc(
     rules = rules or DRCRules()
     
     try:
-        # 保存上传文件
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.dxf') as tmp:
-            content = await file.read()
-            tmp.write(content)
-            tmp_path = tmp.name
+        # 验证文件
+        if not file.filename.lower().endswith('.dxf'):
+            raise HTTPException(status_code=400, detail="仅支持 DXF 文件")
+        
+        # 读取并保存文件
+        content = await file.read()
+        input_file_id = _generate_file_id()
+        input_path = TEMP_DIR / f"{input_file_id}_input.dxf"
+        input_path.write_bytes(content)
         
         # 解析并转换
         parser = DXFParser()
-        elements = parser.parse_file(tmp_path)
+        elements = parser.parse_file(str(input_path))
         
         converter = BondingDiagramConverter()
         assembly = converter.convert_elements(elements)
@@ -200,6 +343,12 @@ async def run_drc(
         })
         
         report = drc_checker.run_and_report(assembly)
+        
+        # 清理临时文件
+        try:
+            input_path.unlink()
+        except Exception:
+            pass
         
         return {
             "passed": report['passed'],
@@ -218,19 +367,42 @@ async def run_drc(
             ]
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-    finally:
-        if 'tmp_path' in locals() and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
 
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
     """下载转换后的文件"""
-    # TODO: 实现文件下载（实际部署时从云存储获取）
-    raise HTTPException(status_code=404, detail="文件不存在")
+    file_path = TEMP_DIR / filename
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="文件不存在或已过期")
+    
+    # 获取文件扩展名
+    suffix = file_path.suffix.lower()
+    
+    # 设置 MIME 类型
+    mime_types = {
+        '.step': 'application/step',
+        '.stp': 'application/step',
+        '.stl': 'application/sla',
+        '.obj': 'application/obj',
+        '.csv': 'text/csv',
+        '.ks': 'text/plain',
+        '.asm': 'text/plain',
+        '.cmd': 'text/plain',
+    }
+    
+    media_type = mime_types.get(suffix, 'application/octet-stream')
+    
+    return FileResponse(
+        path=str(file_path),
+        media_type=media_type,
+        filename=filename
+    )
 
 
 @app.get("/formats")
@@ -253,6 +425,12 @@ async def get_materials():
             {"id": "silver", "name": "银线", "coefficient": 1.4},
         ]
     }
+
+
+@app.on_event("startup")
+async def startup_event():
+    """启动时清理过期文件"""
+    _cleanup_old_files()
 
 
 if __name__ == "__main__":

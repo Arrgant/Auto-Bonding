@@ -18,7 +18,7 @@ export default function FileUploadZone() {
     }
 
     if (newFiles.length !== dxfFiles.length) {
-      toast.warning(`${newFiles.length - dxfFiles.length} 个非 DXF 文件已忽略`)
+      toast(`${newFiles.length - dxfFiles.length} 个非 DXF 文件已忽略`)
     }
 
     dxfFiles.forEach((file) => {

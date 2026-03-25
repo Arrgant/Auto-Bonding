@@ -4,12 +4,17 @@ import type {
   FormatInfo, 
   ConversionConfig, 
   DRCReport,
-  BatchConversionResult 
+  BatchConversionResult,
+  ConversionResponse,
+  BatchConversionResponse
 } from '@/types'
 
+// API 基础 URL - 开发环境使用代理，生产环境可配置
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+
 const api = axios.create({
-  baseURL: '/api',
-  timeout: 60000,
+  baseURL: API_BASE_URL,
+  timeout: 120000, // 2 分钟超时，适合大文件
   headers: {
     'Content-Type': 'application/json',
   },
@@ -42,7 +47,7 @@ api.interceptors.response.use(
  */
 export const getMaterials = async (): Promise<Material[]> => {
   const response = await api.get('/materials')
-  return response.materials || []
+  return (response as any).materials || []
 }
 
 /**
@@ -50,7 +55,7 @@ export const getMaterials = async (): Promise<Material[]> => {
  */
 export const getFormats = async (): Promise<FormatInfo> => {
   const response = await api.get('/formats')
-  return response
+  return response as unknown as FormatInfo
 }
 
 /**
@@ -60,7 +65,7 @@ export const convertFile = async (
   file: File,
   config: ConversionConfig,
   onProgress?: (progress: number) => void
-) => {
+): Promise<ConversionResponse> => {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('config', JSON.stringify(config))
@@ -77,7 +82,7 @@ export const convertFile = async (
     },
   })
 
-  return response
+  return response as unknown as ConversionResponse
 }
 
 /**
@@ -87,7 +92,7 @@ export const convertBatch = async (
   files: File[],
   config: ConversionConfig,
   onProgress?: (filename: string, progress: number) => void
-): Promise<BatchConversionResult> => {
+): Promise<BatchConversionResponse> => {
   const formData = new FormData()
   files.forEach((file) => {
     formData.append('files', file)
@@ -98,9 +103,15 @@ export const convertBatch = async (
     headers: {
       'Content-Type': 'multipart/form-data',
     },
+    onUploadProgress: (progressEvent) => {
+      if (progressEvent.total && onProgress) {
+        const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+        onProgress('uploading', progress)
+      }
+    },
   })
 
-  return response
+  return response as unknown as BatchConversionResponse
 }
 
 /**
@@ -116,7 +127,7 @@ export const runDRC = async (file: File): Promise<DRCReport> => {
     },
   })
 
-  return response
+  return response as unknown as DRCReport
 }
 
 /**
@@ -124,17 +135,37 @@ export const runDRC = async (file: File): Promise<DRCReport> => {
  */
 export const healthCheck = async (): Promise<{ status: string }> => {
   const response = await api.get('/health')
-  return response
+  return response as unknown as { status: string }
 }
 
 /**
  * 下载文件
  */
-export const downloadFile = async (url: string): Promise<Blob> => {
-  const response = await api.get(url, {
+export const downloadFile = async (downloadUrl: string, filename?: string): Promise<void> => {
+  // 如果是相对 URL，添加 baseURL
+  const url = downloadUrl.startsWith('http') 
+    ? downloadUrl 
+    : `${API_BASE_URL}${downloadUrl}`
+  
+  const response = await axios.get(url, {
     responseType: 'blob',
   })
-  return response
+  
+  // 创建下载链接
+  const blob = new Blob([response.data])
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  
+  // 从 URL 提取文件名或使用提供的文件名
+  const extractedFilename = filename || downloadUrl.split('/').pop() || 'download'
+  link.setAttribute('download', extractedFilename)
+  document.body.appendChild(link)
+  link.click()
+  
+  // 清理
+  document.body.removeChild(link)
+  URL.revokeObjectURL(objectUrl)
 }
 
 export default api
