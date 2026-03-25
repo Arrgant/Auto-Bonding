@@ -6,3 +6,14 @@ pydantic>=2.0.0
 
 # 核心依赖
 -e ..  # 引用父目录的 bonding_converter
+
+# 测试
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.23.0
+httpx>=0.26.0  # 用于 FastAPI TestClient
+
+# 开发工具
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.0.0
