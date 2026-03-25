@@ -17,3 +17,7 @@ httpx>=0.26.0  # 用于 FastAPI TestClient
 black>=23.0.0
 flake8>=6.0.0
 mypy>=1.0.0
+pre-commit>=3.6.0
+
+# 类型存根
+types-all>=1.0.0

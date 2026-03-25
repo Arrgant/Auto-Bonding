@@ -79,3 +79,6 @@ frontend/build/
 # Logs
 *.log
 logs/
+
+# Pre-commit
+.pre-commit-cache/
