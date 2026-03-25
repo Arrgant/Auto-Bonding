@@ -18,7 +18,8 @@ export function ThreeViewer({ coordinates }: ThreeViewerProps) {
 
     // 创建场景
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0f172a);
+    // 浅蓝灰色背景，更明亮
+    scene.background = new THREE.Color(0xf1f5f9);
     sceneRef.current = scene;
 
     // 创建相机
@@ -47,8 +48,8 @@ export function ThreeViewer({ coordinates }: ThreeViewerProps) {
       controlsRef.current = controls;
     });
 
-    // 添加网格
-    const gridHelper = new THREE.GridHelper(10, 10, 0x475569, 0x1e293b);
+    // 添加网格 - 使用蓝色系
+    const gridHelper = new THREE.GridHelper(10, 10, 0x3b82f6, 0x93c5fd);
     scene.add(gridHelper);
 
     // 添加坐标轴

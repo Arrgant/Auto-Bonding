@@ -5,28 +5,44 @@
 :root {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   
-  /* 现代设计令牌 */
-  --background: 0 0% 3.9%;
-  --foreground: 0 0% 98%;
-  --card: 0 0% 7%;
-  --card-foreground: 0 0% 98%;
-  --popover: 0 0% 3.9%;
-  --popover-foreground: 0 0% 98%;
-  --primary: 221 83% 53%;
+  /* 🎨 清新双色主题 - 蓝白配色 */
+  /* 主色：活力蓝 | 辅色：纯净白 */
+  
+  --background: 210 40% 98%;        /* 淡蓝白色背景 */
+  --foreground: 222 47% 11%;        /* 深蓝文字 */
+  
+  --card: 0 0% 100%;                /* 纯白卡片 */
+  --card-foreground: 222 47% 11%;   /* 深蓝文字 */
+  
+  --popover: 0 0% 100%;             /* 纯白弹窗 */
+  --popover-foreground: 222 47% 11%;
+  
+  --primary: 221 83% 53%;           /* 活力蓝 #3B82F6 */
   --primary-foreground: 0 0% 100%;
-  --secondary: 0 0% 14.9%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 0 0% 14.9%;
-  --muted-foreground: 0 0% 63.9%;
-  --accent: 217 91% 60%;
+  
+  --secondary: 210 20% 96%;         /* 浅灰蓝 */
+  --secondary-foreground: 222 47% 11%;
+  
+  --muted: 210 20% 96%;
+  --muted-foreground: 215 16% 47%;
+  
+  --accent: 199 89% 48%;            /* 青蓝色点缀 #0EA5E9 */
   --accent-foreground: 0 0% 100%;
+  
   --destructive: 0 84% 60%;
   --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 14.9%;
-  --input: 0 0% 14.9%;
+  
+  --border: 214 32% 91%;            /* 浅蓝边框 */
+  --input: 214 32% 91%;
   --ring: 221 83% 53%;
   
-  color-scheme: dark;
+  --success: 142 76% 36%;           /* 成功绿 */
+  --success-foreground: 0 0% 100%;
+  
+  --warning: 38 92% 50%;            /* 警告黄 */
+  --warning-foreground: 0 0% 100%;
+  
+  color-scheme: light;
   color: hsl(var(--foreground));
   background-color: hsl(var(--background));
 
@@ -57,6 +73,8 @@ body {
 .bg-muted { background-color: hsl(var(--muted)); }
 .bg-accent { background-color: hsl(var(--accent)); }
 .bg-destructive { background-color: hsl(var(--destructive)); }
+.bg-success { background-color: hsl(var(--success)); }
+.bg-warning { background-color: hsl(var(--warning)); }
 
 .text-foreground { color: hsl(var(--foreground)); }
 .text-card-foreground { color: hsl(var(--card-foreground)); }
@@ -66,6 +84,8 @@ body {
 .text-accent { color: hsl(var(--accent)); }
 .text-destructive { color: hsl(var(--destructive)); }
 .text-primary-foreground { color: hsl(var(--primary-foreground)); }
+.text-success-foreground { color: hsl(var(--success-foreground)); }
+.text-warning-foreground { color: hsl(var(--warning-foreground)); }
 
 .border-border { border-color: hsl(var(--border)); }
 .border-input { border-color: hsl(var(--input)); }
@@ -76,23 +96,23 @@ body {
   box-sizing: border-box;
 }
 
-/* 自定义滚动条 */
+/* 自定义滚动条 - 浅色主题 */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #1e293b;
+  background: #f1f5f9;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #475569;
+  background: #cbd5e1;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
+  background: #94a3b8;
 }
 
 /* 动画 */
@@ -126,4 +146,34 @@ body {
 .dropzone-active {
   border-color: #3b82f6;
   background-color: rgba(59, 130, 246, 0.1);
+}
+
+/* 🎨 渐变背景 */
+.gradient-primary {
+  background: linear-gradient(135deg, 
+    hsl(221 83% 53%) 0%, 
+    hsl(199 89% 48%) 100%
+  );
+}
+
+.gradient-subtle {
+  background: linear-gradient(180deg,
+    hsl(210 40% 98%) 0%,
+    hsl(210 20% 96%) 100%
+  );
+}
+
+/* 卡片阴影 */
+.card-shadow {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1),
+              0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.card-shadow-hover {
+  transition: box-shadow 0.3s ease;
+}
+
+.card-shadow-hover:hover {
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1),
+              0 4px 6px -2px rgba(0, 0, 0, 0.05);
 }
