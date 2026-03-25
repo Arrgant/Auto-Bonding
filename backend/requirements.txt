@@ -5,7 +5,9 @@ python-multipart>=0.0.6
 pydantic>=2.0.0
 
 # 核心依赖
--e ..  # 引用父目录的 bonding_converter
+cadquery>=2.4.0
+ezdxf>=1.1.0
+numpy>=1.24.0
 
 # 测试
 pytest>=7.4.0
@@ -19,5 +21,5 @@ flake8>=6.0.0
 mypy>=1.0.0
 pre-commit>=3.6.0
 
-# 类型存根
-types-all>=1.0.0
+# 类型存根（按需添加）
+types-requests>=2.0.0
