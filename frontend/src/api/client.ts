@@ -131,6 +131,40 @@ export const runDRC = async (file: File): Promise<DRCReport> => {
 }
 
 /**
+ * 获取 IGBT 规则配置
+ */
+export const getIgbtRules = async (): Promise<{
+  modes: Array<{ id: string; name: string; description: string }>
+  voltage_classes: Array<{ class: string; name: string; range: string; min_spacing: number }>
+  wire_types: Array<{ id: string; name: string; diameters?: number[]; sizes?: string[] }>
+  pad_types: Array<{ id: string; name: string; min_size: number; description: string }>
+  current_density: Record<string, number>
+}> => {
+  const response = await api.get('/igbt/rules')
+  return response as any
+}
+
+/**
+ * 计算电流承载能力
+ */
+export const calculateCurrentCapacity = async (params: {
+  wire_type: string
+  diameter?: number
+  ribbon_width?: number
+  ribbon_thickness?: number
+}): Promise<{
+  wire_type: string
+  description: string
+  cross_section_mm2: number
+  current_density_A_mm2: number
+  max_current_A: number
+  recommendation: string
+}> => {
+  const response = await api.get('/igbt/current-capacity', { params })
+  return response as any
+}
+
+/**
  * 健康检查
  */
 export const healthCheck = async (): Promise<{ status: string }> => {

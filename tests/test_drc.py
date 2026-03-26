@@ -4,7 +4,7 @@ DRC (Design Rule Check) 单元测试
 
 import pytest
 import cadquery as cq
-from bonding_converter.drc import DRCChecker, DRCViolation, ViolationSeverity
+from bonding_converter.drc import DRCChecker, DRCViolation, DRCMode
 from bonding_converter.converter import BondingDiagramConverter, BondingElement
 
 
@@ -14,9 +14,9 @@ class TestDRCChecker:
     def test_init(self):
         """测试初始化"""
         checker = DRCChecker()
-        assert checker.min_wire_spacing == 0.1
-        assert checker.max_loop_height == 1.0
-        assert checker.min_pad_size == 0.2
+        assert checker.rules['min_wire_spacing'] == 0.1
+        assert checker.rules['max_loop_height'] == 1.0
+        assert checker.rules['min_pad_size'] == 0.2
     
     def test_init_with_rules(self):
         """测试自定义规则初始化"""
@@ -26,8 +26,8 @@ class TestDRCChecker:
             'min_pad_size': 0.3,
         }
         checker = DRCChecker(rules)
-        assert checker.min_wire_spacing == 0.15
-        assert checker.max_loop_height == 1.5
+        assert checker.rules['min_wire_spacing'] == 0.15
+        assert checker.rules['max_loop_height'] == 1.5
         assert checker.min_pad_size == 0.3
     
     def test_check_wire_spacing_pass(self):

@@ -58,6 +58,12 @@ class ConversionConfig(BaseModel):
     default_wire_diameter: float = 0.025
     default_material: str = "gold"
     export_format: str = "STEP"  # STEP, KS, ASM, SHINKAWA, CSV
+    
+    # IGBT 特定配置
+    mode: str = "standard"  # standard, igbt, automotive
+    operating_voltage: float = 600.0  # IGBT 工作电压
+    expected_current: float = 0.0     # 预期电流 (A)
+    wire_type: str = "al_wire"        # al_wire, al_ribbon, cu_wire
 
 
 class DRCRules(BaseModel):
@@ -65,6 +71,11 @@ class DRCRules(BaseModel):
     min_wire_spacing: float = 0.1
     max_loop_height: float = 1.0
     min_pad_size: float = 0.2
+    
+    # IGBT 特定规则
+    mode: str = "standard"  # standard, igbt, automotive
+    operating_voltage: float = 600.0
+    min_spacing_override: Optional[float] = None
 
 
 class ConversionResponse(BaseModel):
@@ -347,14 +358,24 @@ async def run_drc(
         converter = BondingDiagramConverter()
         assembly = converter.convert_elements(elements)
         
+        # 确定 DRC 模式
+        from bonding_converter.drc import DRCMode
+        if rules.mode == "igbt":
+            drc_mode = DRCMode.IGBT
+        elif rules.mode == "automotive":
+            drc_mode = DRCMode.AUTOMOTIVE
+        else:
+            drc_mode = DRCMode.STANDARD
+        
         # DRC 检查
         drc_checker = DRCChecker({
-            'min_wire_spacing': rules.min_wire_spacing,
+            'min_wire_spacing': rules.min_spacing_override or rules.min_wire_spacing,
             'max_loop_height': rules.max_loop_height,
             'min_pad_size': rules.min_pad_size,
-        })
+            'operating_voltage': rules.operating_voltage,
+        }, mode=drc_mode)
         
-        report = drc_checker.run_and_report(assembly)
+        report = drc_checker.run_and_report(assembly, elements)
         
         # 清理临时文件
         try:
@@ -367,6 +388,7 @@ async def run_drc(
             "total_violations": report['total_violations'],
             "errors": report['errors'],
             "warnings": report['warnings'],
+            "mode": rules.mode,
             "violations": [
                 {
                     "type": v.violation_type,
@@ -374,6 +396,7 @@ async def run_drc(
                     "description": v.description,
                     "actual": v.actual_value,
                     "required": v.required_value,
+                    "category": v.rule_category,
                 }
                 for v in report['violations']
             ]
@@ -431,11 +454,91 @@ async def get_materials():
     """获取支持的材料"""
     return {
         "materials": [
-            {"id": "gold", "name": "金线", "coefficient": 1.5},
-            {"id": "copper", "name": "铜线", "coefficient": 1.2},
-            {"id": "aluminum", "name": "铝线", "coefficient": 1.8},
-            {"id": "silver", "name": "银线", "coefficient": 1.4},
+            {"id": "gold", "name": "金线", "coefficient": 1.5, "typical_use": "信号线"},
+            {"id": "copper", "name": "铜线", "coefficient": 1.2, "typical_use": "通用"},
+            {"id": "aluminum", "name": "铝线", "coefficient": 1.8, "typical_use": "功率器件"},
+            {"id": "silver", "name": "银线", "coefficient": 1.4, "typical_use": "高频"},
         ]
+    }
+
+
+@app.get("/igbt/rules")
+async def get_igbt_rules():
+    """获取 IGBT 键合规则配置"""
+    return {
+        "modes": [
+            {"id": "standard", "name": "标准 IC", "description": "普通集成电路"},
+            {"id": "igbt", "name": "IGBT 功率器件", "description": "绝缘栅双极晶体管"},
+            {"id": "automotive", "name": "车规级", "description": "AEC-Q100 车规标准"},
+        ],
+        "voltage_classes": [
+            {"class": "low", "name": "低压", "range": "<100V", "min_spacing": 0.5},
+            {"class": "medium", "name": "中压", "range": "100-600V", "min_spacing": 1.0},
+            {"class": "high", "name": "高压", "range": "600-1200V", "min_spacing": 2.0},
+            {"class": "ultra_high", "name": "超高压", "range": ">1200V", "min_spacing": 3.0},
+        ],
+        "wire_types": [
+            {"id": "al_wire", "name": "铝线", "diameters": [0.1, 0.15, 0.2, 0.25, 0.3, 0.375, 0.4, 0.5]},
+            {"id": "al_ribbon", "name": "铝带", "sizes": ["500×50μm", "1000×75μm", "1500×100μm", "2000×125μm"]},
+            {"id": "cu_wire", "name": "铜线", "diameters": [0.1, 0.15, 0.2, 0.25, 0.3]},
+        ],
+        "pad_types": [
+            {"id": "emitter", "name": "发射极", "min_size": 0.3, "description": "大电流输出"},
+            {"id": "collector", "name": "集电极", "min_size": 0.5, "description": "高压输入"},
+            {"id": "gate", "name": "栅极", "min_size": 0.2, "description": "控制信号"},
+        ],
+        "current_density": {
+            "al_wire": 300,      # A/mm²
+            "al_ribbon": 400,    # A/mm²
+            "cu_wire": 500,      # A/mm²
+        }
+    }
+
+
+@app.get("/igbt/current-capacity")
+async def calculate_current_capacity(
+    wire_type: str = "al_wire",
+    diameter: float = 0.3,
+    ribbon_width: float = None,
+    ribbon_thickness: float = None
+):
+    """
+    计算引线电流承载能力
+    
+    Args:
+        wire_type: al_wire, al_ribbon, cu_wire
+        diameter: 线径 (mm)
+        ribbon_width: 铝带宽度 (mm)
+        ribbon_thickness: 铝带厚度 (mm)
+    """
+    import math
+    
+    # 电流密度 (A/mm²)
+    current_density = {
+        'al_wire': 300,
+        'al_ribbon': 400,
+        'cu_wire': 500,
+    }
+    
+    if wire_type == 'al_ribbon' and ribbon_width and ribbon_thickness:
+        # 铝带截面积
+        cross_section = ribbon_width * ribbon_thickness
+        desc = f"铝带 {ribbon_width}×{ribbon_thickness}mm"
+    else:
+        # 圆线截面积
+        cross_section = math.pi * (diameter / 2) ** 2
+        desc = f"线径 Ø{diameter}mm"
+    
+    density = current_density.get(wire_type, 300)
+    max_current = cross_section * density
+    
+    return {
+        "wire_type": wire_type,
+        "description": desc,
+        "cross_section_mm2": round(cross_section, 4),
+        "current_density_A_mm2": density,
+        "max_current_A": round(max_current, 2),
+        "recommendation": f"建议工作电流 < {round(max_current * 0.8, 2)}A (80% 降额)"
     }
 
 

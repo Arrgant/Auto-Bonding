@@ -3,6 +3,7 @@ export interface Material {
   id: string;
   name: string;
   coefficient: number;
+  typical_use?: string;  // 典型用途
 }
 
 // 导出格式
@@ -17,6 +18,11 @@ export interface ConversionConfig {
   default_wire_diameter: number;
   default_material: string;
   export_format: string;
+  // IGBT 特定字段
+  mode?: 'standard' | 'igbt' | 'automotive';
+  operating_voltage?: number;
+  wire_type?: 'al_wire' | 'al_ribbon' | 'cu_wire';
+  expected_current?: number;
 }
 
 // 上传文件
@@ -48,7 +54,7 @@ export interface ConversionTask {
 
 // DRC 违规
 export interface DRCViolation {
-  type: 'spacing' | 'height' | 'width';
+  type: 'spacing' | 'height' | 'width' | 'span' | 'current' | 'voltage_spacing' | 'pad_size';
   severity: 'error' | 'warning';
   description: string;
   actual_value: number;
@@ -58,6 +64,7 @@ export interface DRCViolation {
     y: number;
     z: number;
   };
+  category?: 'general' | 'igbt' | 'electrical' | 'mechanical';  // 规则类别
 }
 
 // DRC 报告
@@ -134,4 +141,71 @@ export interface BondingCoordinate {
   z: number;
   type: 'ball' | 'wedge' | 'stitch';
   index: number;
+}
+
+
+// ========== IGBT 特定类型 ==========
+
+// IGBT 焊盘类型
+export type IGBTPadType = 'emitter' | 'collector' | 'gate' | 'sense' | 'dummy'
+
+// IGBT 引线类型
+export type IGBTWireType = 'al_wire' | 'al_ribbon' | 'cu_wire' | 'au_wire'
+
+// IGBT 模式
+export type IGBTMode = 'standard' | 'igbt' | 'automotive'
+
+// IGBT 规则配置
+export interface IGBTRules {
+  modes: Array<{
+    id: IGBTMode
+    name: string
+    description: string
+  }>
+  voltage_classes: Array<{
+    class: 'low' | 'medium' | 'high' | 'ultra_high'
+    name: string
+    range: string
+    min_spacing: number
+  }>
+  wire_types: Array<{
+    id: IGBTWireType
+    name: string
+    diameters?: number[]
+    sizes?: string[]
+  }>
+  pad_types: Array<{
+    id: IGBTPadType
+    name: string
+    min_size: number
+    description: string
+  }>
+  current_density: Record<string, number>
+}
+
+// IGBT 焊盘信息
+export interface IGBTPad {
+  type: IGBTPadType
+  x: number
+  y: number
+  width: number
+  height: number
+  net: string  // 网络名称
+}
+
+// IGBT 引线信息
+export interface IGBTWire {
+  from_pad: number  // 起始焊盘索引
+  to_pad: number    // 目标焊盘索引
+  wire_type: IGBTWireType
+  diameter: number
+  expected_current: number
+}
+
+// IGBT 设计信息
+export interface IGBTDesign {
+  operating_voltage: number
+  max_current: number
+  ambient_temperature: number
+  package_type: string  // TO-247, TO-220, etc.
 }

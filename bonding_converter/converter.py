@@ -30,6 +30,9 @@ class WireLoop:
 class BondingDiagramConverter:
     """键合图转换器"""
     
+    # IGBT 特定配置
+    IGBT_MODES = ['standard', 'igbt', 'automotive']
+    
     def __init__(self, config: Optional[Dict] = None):
         """
         初始化转换器
@@ -39,11 +42,26 @@ class BondingDiagramConverter:
                 - loop_height_coefficient: 弧高系数 (默认 1.5)
                 - default_wire_diameter: 默认线径 mm (默认 0.025)
                 - default_material: 默认材料 (默认 'gold')
+                - mode: 模式 (standard/igbt/automotive)
+                - operating_voltage: 工作电压 (IGBT)
+                - wire_type: 引线类型 (al_wire/al_ribbon)
         """
         self.config = config or {}
-        self.loop_height_coefficient = self.config.get('loop_height_coefficient', 1.5)
-        self.default_wire_diameter = self.config.get('default_wire_diameter', 0.025)
-        self.default_material = self.config.get('default_material', 'gold')
+        self.mode = self.config.get('mode', 'standard')
+        self.is_igbt = self.mode in ['igbt', 'automotive']
+        
+        if self.is_igbt:
+            # IGBT 模式默认参数
+            self.loop_height_coefficient = self.config.get('loop_height_coefficient', 2.0)
+            self.default_wire_diameter = self.config.get('default_wire_diameter', 0.3)  # 300μm
+            self.default_material = self.config.get('default_material', 'aluminum')
+            self.wire_type = self.config.get('wire_type', 'al_wire')
+        else:
+            # 标准 IC 模式
+            self.loop_height_coefficient = self.config.get('loop_height_coefficient', 1.5)
+            self.default_wire_diameter = self.config.get('default_wire_diameter', 0.025)
+            self.default_material = self.config.get('default_material', 'gold')
+            self.wire_type = 'au_wire'
         
         # 材料系数 (经验值)
         self.material_coefficients = {
@@ -52,6 +70,13 @@ class BondingDiagramConverter:
             'aluminum': 1.8,
             'silver': 1.4,
         }
+        
+        # IGBT 模式使用更大的弧高系数
+        if self.is_igbt:
+            self.material_coefficients['aluminum'] = 2.0  # 铝线弧高更大
+            # 车规级额外 20% 热膨胀补偿
+            if self.mode == 'automotive':
+                self.material_coefficients['aluminum'] *= 1.2
     
     def calculate_loop_height(self, span: float, wire_diameter: float, material: str) -> float:
         """
