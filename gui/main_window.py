@@ -148,67 +148,79 @@ class MainWindow(QMainWindow):
         self.statusbar.addWidget(self.loading_label)
     
     def _start_services(self):
-        """启动后端和前端服务"""
-        # 获取项目根目录
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        """启动服务"""
+        # 创建一个简单的本地 HTML 页面作为占位
+        import tempfile
+        import http.server
+        import threading
         
-        # 启动后端服务
-        try:
-            backend_path = os.path.join(base_dir, "backend", "main.py")
-            self.backend_process = subprocess.Popen(
-                [sys.executable, backend_path],
-                cwd=base_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            print(f"✅ 后端服务已启动 (PID: {self.backend_process.pid})")
-        except Exception as e:
-            print(f"❌ 后端启动失败：{e}")
-            self.loading_label.setText(f"后端启动失败：{e}")
-            return
+        # 创建临时目录存放静态文件
+        self.static_dir = tempfile.mkdtemp(prefix="autobonding_")
         
-        # 等待后端启动
-        QTimer.singleShot(2000, self._start_frontend)
-    
-    def _start_frontend(self):
-        """启动前端服务"""
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        frontend_dir = os.path.join(base_dir, "frontend")
+        # 生成简单的 HTML 页面
+        html_content = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Auto-Bonding</title>
+            <style>
+                body { 
+                    margin: 0; 
+                    background: #1F2937; 
+                    color: white;
+                    font-family: system-ui, -apple-system, sans-serif;
+                }
+                .container {
+                    max-width: 1200px;
+                    margin: 0 auto;
+                    padding: 40px 20px;
+                }
+                h1 { font-size: 2.5rem; margin-bottom: 1rem; }
+                p { font-size: 1.2rem; color: #9CA3AF; }
+                .btn {
+                    display: inline-block;
+                    padding: 12px 24px;
+                    background: #3B82F6;
+                    color: white;
+                    border-radius: 8px;
+                    text-decoration: none;
+                    margin-top: 20px;
+                }
+                .btn:hover { background: #2563EB; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🔧 Auto-Bonding</h1>
+                <p>键合图自动转换工具</p>
+                <p>前端界面开发中...</p>
+                <a href="#" class="btn" onclick="alert('请使用文件菜单导入 DXF 文件')">📂 选择文件</a>
+            </div>
+        </body>
+        </html>
+        """
         
-        try:
-            # 检查是否有构建产物
-            dist_dir = os.path.join(frontend_dir, "dist")
-            if os.path.exists(os.path.join(dist_dir, "index.html")):
-                # 使用内置的简单 HTTP 服务器
-                import http.server
-                import threading
-                
-                handler = http.server.SimpleHTTPRequestHandler
-                handler.directory = dist_dir
-                
-                # 找空闲端口
-                port = self._find_free_port(3000)
-                
-                def serve():
-                    os.chdir(dist_dir)
-                    server = http.server.HTTPServer(("", port), handler)
-                    server.serve_forever()
-                
-                thread = threading.Thread(target=serve, daemon=True)
-                thread.start()
-                
-                self.frontend_url = f"http://localhost:{port}"
-                print(f"✅ 前端服务已启动：{self.frontend_url}")
-                
-                # 加载页面
-                QTimer.singleShot(500, self._load_page)
-            else:
-                self.loading_label.setText("❌ 前端未构建，请先运行 npm run build")
-                print("❌ 前端 dist 目录不存在")
-        except Exception as e:
-            print(f"❌ 前端启动失败：{e}")
-            self.loading_label.setText(f"前端启动失败：{e}")
+        html_path = os.path.join(self.static_dir, "index.html")
+        with open(html_path, 'w') as f:
+            f.write(html_content)
+        
+        # 启动 HTTP 服务器
+        port = self._find_free_port(8080)
+        
+        def serve():
+            os.chdir(self.static_dir)
+            server = http.server.HTTPServer(("", port), http.server.SimpleHTTPRequestHandler)
+            server.serve_forever()
+        
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        
+        self.frontend_url = f"http://localhost:{port}"
+        print(f"✅ 服务已启动：{self.frontend_url}")
+        
+        # 加载页面
+        QTimer.singleShot(500, self._load_page)
     
     def _find_free_port(self, start_port=3000):
         """查找空闲端口"""
