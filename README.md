@@ -4,31 +4,21 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Node.js 20+](https://img.shields.io/badge/node-20+-green.svg)](https://nodejs.org/)
 
 ## ✨ 功能特性
 
-### 通用功能
 - 📄 **DXF 导入** - 支持键合图标准格式
 - 🔄 **2D→3D 转换** - 自动重建引线弧、焊盘等 3D 几何
 - 📤 **STEP 导出** - 生成 3D 模型供用户预览
 - 📊 **坐标导出** - 支持 K&S/ASM/Shinkawa 等打线机格式
 - ⚡ **批量处理** - 一次转换多个图纸
 - ✅ **DRC 检查** - 设计规则验证（间距、弧高等）
-- 🌐 **Web 界面** - 现代化的 React 前端
-- 🐳 **Docker 部署** - 一键容器化部署
-
-### 🔌 IGBT 功率器件支持 (新增)
-- 🎯 **三种模式** - 标准 IC / IGBT / 车规级 (AEC-Q100)
-- ⚡ **电压等级** - 自动识别低压/中压/高压/超高压，应用对应间距规则
-- 🔩 **引线类型** - 支持铝线 (100-500μm) / 铝带 / 铜线
-- 📏 **电流承载** - 自动计算引线电流承载能力，提供降额建议
-- 🌡️ **热膨胀补偿** - 车规级额外 20% 弧高补偿，应对温度循环
-- 📐 **焊盘类型** - 发射极/集电极/栅极专用规则验证
+- 🖥️ **独立客户端** - 现代化 PyQt6 桌面应用
+- 🔌 **IGBT 支持** - 功率器件专用规则（电压等级、电流承载、车规级补偿）
 
 ## 🎯 快速开始
 
-### 🖥️ 独立客户端 (推荐)
+### 🖥️ 独立客户端
 
 ```bash
 # 克隆仓库
@@ -40,54 +30,31 @@ pip install -r requirements.txt
 
 # 启动客户端
 python run_client.py
+# 或
+./start.sh
 ```
 
-### 🌐 Web 版
+### 📦 打包成可执行文件
 
 ```bash
-# 后端
-cd backend
-pip install -r requirements.txt
-python -m uvicorn main:app --reload
+# Windows
+pyinstaller --name="Auto-Bonding" --windowed --onefile main.py
 
-# 前端
-cd frontend
-npm install
-npm run dev
+# macOS
+pyinstaller --name="Auto-Bonding" --windowed --onefile main.py
 
-# 访问 http://localhost:3000
-```
-
-### 🐳 Docker 部署
-
-```bash
-# 克隆仓库
-git clone https://gitee.com/arrgant/AutoBonding.git
-cd Auto-Bonding
-
-# 启动服务
-docker-compose up -d
-
-# 访问 http://localhost:8080
-```
-
-# 前端
-cd frontend
-npm install
-npm run dev
+# Linux
+pyinstaller --name="Auto-Bonding" --windowed --onefile main.py
 ```
 
 ## 🛠️ 技术栈
 
 | 组件 | 技术 |
 |------|------|
-| **后端** | FastAPI, Python 3.11+ |
-| **前端** | React 18, TypeScript, Vite |
+| **客户端** | PyQt6 + WebEngine |
 | **3D 建模** | CadQuery (OpenCASCADE) |
-| **3D 预览** | Three.js, React Three Fiber |
 | **DXF 解析** | ezdxf |
-| **数据处理** | NumPy, Pandas |
-| **部署** | Docker, Docker Compose |
+| **数据处理** | NumPy |
 
 ## 📖 使用指南
 
@@ -126,91 +93,100 @@ npm run dev
 
 ```
 Auto-Bonding/
-├── backend/                # FastAPI 后端
-│   ├── main.py            # API 入口
-│   ├── requirements.txt   # Python 依赖
-│   └── .env.example       # 配置模板
-├── frontend/              # React 前端
-│   ├── src/
-│   │   ├── Index.tsx     # 主入口
-│   │   ├── components/   # 组件
-│   │   ├── api/          # API 客户端
-│   │   └── types/        # TypeScript 类型
-│   ├── package.json
-│   └── .env.example
+├── gui/                   # PyQt6 客户端
+│   └── main_window.py     # 主窗口
 ├── bonding_converter/     # 核心转换模块
 │   ├── converter.py       # 2D→3D 转换
 │   ├── dxf_parser.py      # DXF 解析
 │   ├── exporter.py        # 坐标导出
-│   └── drc.py             # DRC 检查
+│   ├── drc.py             # DRC 检查
+│   └── igbt_rules.py      # IGBT 规则
 ├── tests/                 # 测试
 │   ├── test_converter.py
 │   ├── test_exporter.py
 │   ├── test_drc.py
-│   └── integration/       # 集成测试
+│   └── test_igbt_rules.py
 ├── examples/              # 示例文件
-│   ├── sample.dxf
-│   └── README.md
-├── docker-compose.yml     # Docker 编排
-├── Dockerfile.backend     # 后端镜像
-├── Dockerfile.frontend    # 前端镜像
-├── run_tests.sh          # 测试脚本
-├── README.md             # 本文件
-├── DEPLOYMENT.md         # 部署指南
-├── API.md                # API 文档
-└── CONTRIBUTING.md       # 贡献指南
+│   └── sample.dxf
+├── main.py                # 程序入口
+├── run_client.py          # 客户端启动脚本
+├── start.sh               # Linux/Mac 启动脚本
+├── requirements.txt       # Python 依赖
+└── README.md              # 本文件
 ```
 
 ## 🧪 测试
 
 ```bash
 # 运行所有测试
-./run_tests.sh
-
-# 单元测试
 pytest tests/ -v
 
-# 集成测试
-pytest tests/integration/ -v
-
-# 带覆盖率
-pytest --cov=bonding_converter
+# 运行特定测试
+pytest tests/test_converter.py -v
 ```
 
-## 📚 文档
+## ⚙️ 配置说明
 
-- **[API 文档](API.md)** - RESTful API 接口说明
-- **[部署指南](DEPLOYMENT.md)** - 生产环境部署
-- **[贡献指南](CONTRIBUTING.md)** - 如何贡献代码
+### 弧高系数
+
+弧高系数决定引线弧度：
+- **标准 IC**: 1.5 (金线，小跨度)
+- **IGBT**: 2.0 (铝线，大跨度)
+- **车规级**: 2.0 + 20% 热补偿
+
+### IGBT 模式
+
+IGBT 功率器件需要更严格的设计规则：
+
+1. **电压等级** 自动确定最小间距：
+   - 低压 (≤100V): 0.1mm
+   - 中压 (100-600V): 0.5mm
+   - 高压 (600-1200V): 1.0mm
+   - 超高压 (>1200V): 2.0mm
+
+2. **电流承载** 根据线径和材料计算：
+   - 金线 25μm: ~0.1A
+   - 铝线 300μm: ~3-5A
+   - 铝带: 10A+
+
+3. **车规级 (AEC-Q100)**:
+   - 额外 20% 弧高补偿
+   - 更严格的间距要求
+   - 温度循环补偿
+
+## 🔧 开发
+
+### 添加新功能
+
+1. 在 `bonding_converter/` 添加核心逻辑
+2. 在 `gui/` 更新界面
+3. 在 `tests/` 添加测试
+
+### 代码规范
+
+```bash
+# 格式化
+black .
+
+# 检查
+flake8 .
+
+# 类型检查
+mypy .
+```
+
+## 📝 更新日志
+
+详见 [CHANGELOG.md](CHANGELOG.md)
 
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
-1. Fork 项目
-2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
-
-详见 [CONTRIBUTING.md](CONTRIBUTING.md)
-
 ## 📄 许可证
 
-MIT License - 详见 [LICENSE](LICENSE) 文件
-
-## 👥 作者
-
-**夏季**
-
-- GitHub: [@YOUR_USERNAME](https://github.com/YOUR_USERNAME)
-- Email: your.email@example.com
-
-## 🙏 致谢
-
-感谢所有为这个项目做出贡献的开发者！
+MIT License - 详见 [LICENSE](LICENSE)
 
 ---
 
-**版本**: v0.2.0  
-**更新时间**: 2026-03-25
+*最后更新：2026-03-26*
