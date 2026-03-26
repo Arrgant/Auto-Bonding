@@ -34,7 +34,7 @@ export default function ConversionConfig() {
   })
 
   // 获取 IGBT 规则
-  const { data: igbtRules } = useQuery({
+  useQuery({
     queryKey: ['igbtRules'],
     queryFn: getIgbtRules,
     enabled: mode !== 'standard',
@@ -42,7 +42,11 @@ export default function ConversionConfig() {
 
   // 同步到 store
   useEffect(() => {
-    setConfig({ ...formData, mode })
+    setConfig({ 
+      ...formData, 
+      mode,
+      wire_type: formData.wire_type as 'al_wire' | 'al_ribbon' | 'cu_wire' | undefined
+    })
   }, [formData, mode, setConfig])
 
   // 模式切换时更新默认值

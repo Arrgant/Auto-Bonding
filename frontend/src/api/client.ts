@@ -5,12 +5,11 @@ import type {
   ConversionConfig, 
   DRCReport,
   BatchConversionResult,
-  ConversionResponse,
-  BatchConversionResponse
+  ApiResponse
 } from '@/types'
 
 // API 基础 URL - 开发环境使用代理，生产环境可配置
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || '/api'
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -65,7 +64,7 @@ export const convertFile = async (
   file: File,
   config: ConversionConfig,
   onProgress?: (progress: number) => void
-): Promise<ConversionResponse> => {
+): Promise<ApiResponse<any>> => {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('config', JSON.stringify(config))
@@ -82,7 +81,7 @@ export const convertFile = async (
     },
   })
 
-  return response as unknown as ConversionResponse
+  return response as unknown as ApiResponse<any>
 }
 
 /**
@@ -92,7 +91,7 @@ export const convertBatch = async (
   files: File[],
   config: ConversionConfig,
   onProgress?: (filename: string, progress: number) => void
-): Promise<BatchConversionResponse> => {
+): Promise<BatchConversionResult> => {
   const formData = new FormData()
   files.forEach((file) => {
     formData.append('files', file)
@@ -111,7 +110,7 @@ export const convertBatch = async (
     },
   })
 
-  return response as unknown as BatchConversionResponse
+  return response as unknown as BatchConversionResult
 }
 
 /**
