@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import math
+
+import ezdxf
+
+from core.raw_dxf import extract_coordinates_from_raw_entities, load_raw_dxf_entities
+
+
+def test_load_raw_dxf_entities_collects_layers_and_counts(tmp_path):
+    doc = ezdxf.new()
+    doc.layers.add("SIGNAL", color=1)
+    doc.layers.add("MECH", color=3)
+
+    msp = doc.modelspace()
+    msp.add_line((0, 0), (10, 0), dxfattribs={"layer": "SIGNAL"})
+    msp.add_circle((5, 5), 2, dxfattribs={"layer": "MECH"})
+
+    dxf_path = tmp_path / "layers.dxf"
+    doc.saveas(dxf_path)
+
+    entities, scene_rect, counts, layer_info = load_raw_dxf_entities(dxf_path, {"SIGNAL": "wire"})
+
+    assert len(entities) == 2
+    assert counts["LINE"] == 1
+    assert counts["CIRCLE"] == 1
+    assert scene_rect[2] > 0
+    assert scene_rect[3] > 0
+
+    signal_layer = next(layer for layer in layer_info if layer["name"] == "SIGNAL")
+    mech_layer = next(layer for layer in layer_info if layer["name"] == "MECH")
+
+    assert signal_layer["mapped_type"] == "wire"
+    assert signal_layer["entity_count"] == 1
+    assert signal_layer["entity_types"] == {"LINE": 1}
+    assert mech_layer["entity_types"] == {"CIRCLE": 1}
+
+
+def test_load_raw_dxf_entities_expands_bulge_polyline(tmp_path):
+    doc = ezdxf.new()
+    msp = doc.modelspace()
+    msp.add_lwpolyline(
+        [(0.0, 0.0, 1.0), (10.0, 0.0, 0.0)],
+        format="xyb",
+        dxfattribs={"layer": "ARC_PATH"},
+    )
+
+    dxf_path = tmp_path / "bulge.dxf"
+    doc.saveas(dxf_path)
+
+    entities, _, counts, _ = load_raw_dxf_entities(dxf_path)
+
+    assert counts["LWPOLYLINE"] == 1
+    assert len(entities) == 1
+    assert entities[0]["type"] == "LWPOLYLINE"
+    assert len(entities[0]["points"]) > 2
+
+
+def test_extract_coordinates_from_raw_entities_deduplicates_points():
+    raw_entities = [
+        {"type": "LINE", "start": (0.0, 0.0), "end": (1.0, 0.0)},
+        {"type": "LWPOLYLINE", "points": [(1.0, 0.0), (2.0, 0.0)], "closed": False},
+        {"type": "CIRCLE", "center": (2.0, 0.0), "radius": 0.5},
+        {"type": "POINT", "location": (0.0, 0.0)},
+    ]
+
+    points = extract_coordinates_from_raw_entities(raw_entities)
+
+    assert len(points) == 3
+    assert {(point.x, point.y, point.z) for point in points} == {
+        (0.0, 0.0, 0.0),
+        (1.0, 0.0, 0.0),
+        (2.0, 0.0, 0.0),
+    }

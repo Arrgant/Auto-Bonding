@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.venv/
 env/
 venv/
 ENV/
@@ -25,11 +26,6 @@ wheels/
 
 # PyQt
 *.pyuic
-
-# Node
-frontend/node_modules/
-frontend/dist/
-frontend/.env
 
 # IDE
 .vscode/
@@ -55,3 +51,6 @@ htmlcov/
 build/
 dist/
 *.spec
+
+# Generated output
+output/

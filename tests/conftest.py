@@ -1,17 +1,31 @@
-"""
-pytest 配置
-"""
+"""Shared pytest configuration."""
+
+from __future__ import annotations
+
+import os
+import sys
+import warnings
 
 import pytest
-import sys
-import os
 
-# 添加项目根目录到 Python 路径
+try:
+    from pyparsing.exceptions import PyparsingDeprecationWarning
+except Exception:  # pragma: no cover
+    PyparsingDeprecationWarning = None
+
+if PyparsingDeprecationWarning is not None:
+    warnings.filterwarnings(
+        "ignore",
+        category=PyparsingDeprecationWarning,
+    )
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def pytest_configure(config):
-    """pytest 配置"""
+    """Configure shared markers and warning filters."""
+
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
     )
@@ -22,7 +36,8 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="session")
 def test_config():
-    """测试配置"""
+    """Common test configuration."""
+
     return {
         "min_wire_spacing": 0.1,
         "max_loop_height": 1.0,

@@ -1,60 +1,42 @@
 #!/usr/bin/env python3
-"""
-Auto-Bonding 客户端启动脚本
-一键启动独立客户端
-"""
+"""Desktop launcher for the PySide6 desktop application."""
+
+from __future__ import annotations
 
 import subprocess
 import sys
-import os
+from pathlib import Path
 
 
-def check_dependencies():
-    """检查依赖是否安装"""
-    try:
-        import PyQt6
-        import PyQt6.QtWebEngineWidgets
-        print("✅ PyQt6 已安装")
-    except ImportError:
-        print("❌ PyQt6 未安装，正在安装...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "PyQt6", "PyQt6-WebEngine"])
-    
-    try:
-        import cadquery
-        print("✅ CadQuery 已安装")
-    except ImportError:
-        print("❌ CadQuery 未安装，正在安装...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "cadquery", "ezdxf", "numpy"])
+REQUIRED_MODULES = ("PySide6", "cadquery", "ezdxf", "numpy")
 
 
-def run():
-    """主函数"""
-    print("🚀 Auto-Bonding 客户端启动中...")
-    
-    # 检查依赖
-    check_dependencies()
-    
-    # 启动客户端
-    print("🎯 启动客户端...")
-    from PyQt6.QtWidgets import QApplication
-    from PyQt6.QtCore import Qt
-    from gui.main_window import MainWindow
-    
-    # 启用高 DPI 支持
-    QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+def ensure_dependencies() -> None:
+    missing = []
+
+    for module_name in REQUIRED_MODULES:
+        try:
+            __import__(module_name)
+        except ImportError:
+            missing.append(module_name)
+
+    if not missing:
+        return
+
+    print(f"Installing missing dependencies: {', '.join(missing)}")
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "-r", str(Path(__file__).with_name("requirements.txt"))]
     )
-    
-    app = QApplication(sys.argv)
-    app.setApplicationName("Auto-Bonding")
-    app.setOrganizationName("Auto-Bonding")
-    app.setApplicationVersion("1.0.0")
-    
-    window = MainWindow()
-    window.show()
-    
-    sys.exit(app.exec())
+
+
+def main() -> None:
+    print("Launching Auto-Bonding desktop app...")
+    ensure_dependencies()
+
+    from main import main as launch_app
+
+    raise SystemExit(launch_app())
 
 
 if __name__ == "__main__":
-    run()
+    main()

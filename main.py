@@ -1,39 +1,49 @@
 #!/usr/bin/env python3
-"""
-Auto-Bonding - 键合图自动转换工具
-主程序入口 - 独立客户端版本
-"""
+"""Application entry point for the desktop application."""
 
-import sys
+from __future__ import annotations
+
+import ctypes
 import os
+import sys
+from pathlib import Path
 
-# 添加项目根目录到路径
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QApplication
 
-from gui.main_window import MainWindow
+from ui.main_window import MainWindow
 
 
-def main():
-    """主函数"""
-    from PyQt6.QtWidgets import QApplication
-    from PyQt6.QtCore import Qt
-    
-    # 启用高 DPI 支持
+def main() -> int:
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, root_dir)
+    icon_path = Path(root_dir) / "assets" / "icons" / "app_icon.png"
+
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
-    
+
+    if sys.platform.startswith("win"):
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Arrgant.AutoBonding")
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
     app.setApplicationName("Auto-Bonding")
     app.setOrganizationName("Auto-Bonding")
-    app.setApplicationVersion("1.0.0")
-    
-    # 创建主窗口
+    app.setApplicationVersion("2.0.0")
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
+
     window = MainWindow()
+    if icon_path.exists():
+        window.setWindowIcon(QIcon(str(icon_path)))
     window.show()
-    
-    sys.exit(app.exec())
+
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
