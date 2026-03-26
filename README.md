@@ -28,11 +28,41 @@
 
 ## 🎯 快速开始
 
-### 使用 Docker (推荐)
+### 🖥️ 独立客户端 (推荐)
 
 ```bash
 # 克隆仓库
-git clone https://github.com/YOUR_USERNAME/Auto-Bonding.git
+git clone https://gitee.com/arrgant/AutoBonding.git
+cd Auto-Bonding
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 启动客户端
+python run_client.py
+```
+
+### 🌐 Web 版
+
+```bash
+# 后端
+cd backend
+pip install -r requirements.txt
+python -m uvicorn main:app --reload
+
+# 前端
+cd frontend
+npm install
+npm run dev
+
+# 访问 http://localhost:3000
+```
+
+### 🐳 Docker 部署
+
+```bash
+# 克隆仓库
+git clone https://gitee.com/arrgant/AutoBonding.git
 cd Auto-Bonding
 
 # 启动服务
@@ -40,14 +70,6 @@ docker-compose up -d
 
 # 访问 http://localhost:8080
 ```
-
-### 开发环境
-
-```bash
-# 后端
-cd backend
-pip install -r requirements.txt
-python -m uvicorn main:app --reload
 
 # 前端
 cd frontend
