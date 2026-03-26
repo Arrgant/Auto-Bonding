@@ -27,7 +27,7 @@ def check_dependencies():
         subprocess.check_call([sys.executable, "-m", "pip", "install", "cadquery", "ezdxf", "numpy"])
 
 
-def main():
+def run():
     """主函数"""
     print("🚀 Auto-Bonding 客户端启动中...")
     
@@ -36,9 +36,25 @@ def main():
     
     # 启动客户端
     print("🎯 启动客户端...")
-    from gui.main_window import main
-    main()
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtCore import Qt
+    from gui.main_window import MainWindow
+    
+    # 启用高 DPI 支持
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+    
+    app = QApplication(sys.argv)
+    app.setApplicationName("Auto-Bonding")
+    app.setOrganizationName("Auto-Bonding")
+    app.setApplicationVersion("1.0.0")
+    
+    window = MainWindow()
+    window.show()
+    
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
-    main()
+    run()
