@@ -9,6 +9,9 @@ from typing import Any
 import cadquery as cq
 from PySide6.QtCore import QByteArray
 
+from core.layer_colors import hex_to_rgb
+from core.layer_stack import layer_sort_key
+from core.pipeline_types import LayerMeshPayload
 
 MESH_QUALITY_SETTINGS = {
     "coarse": {
@@ -92,36 +95,24 @@ def _progressive_compound(assembly: Any, diagonal_hint: float) -> Any:
     return cq.Compound.makeCompound([compound for _, compound in kept])
 
 
-def build_mesh_payload(
-    assembly: Any,
-    quality: str = "coarse",
+def _mesh_payload_from_compound(
+    compound: Any,
+    quality: str,
     *,
     center_override: tuple[float, float, float] | None = None,
     diagonal_override: float | None = None,
-    progressive_filter: bool = False,
 ) -> tuple[QByteArray, int, float]:
-    """Build a Qt3D-ready vertex payload from a CadQuery assembly."""
-
-    settings = MESH_QUALITY_SETTINGS.get(quality, MESH_QUALITY_SETTINGS["coarse"])
-    if not hasattr(assembly, "toCompound"):
-        return QByteArray(), 0, 1.0
-
-    compound = (
-        _progressive_compound(assembly, float(diagonal_override or 0.0))
-        if progressive_filter
-        else assembly.toCompound()
-    )
     if compound is None:
         return QByteArray(), 0, 1.0
 
+    settings = MESH_QUALITY_SETTINGS.get(quality, MESH_QUALITY_SETTINGS["coarse"])
     bbox = compound.BoundingBox()
-    diagonal = max(float(bbox.xlen), float(bbox.ylen), float(bbox.zlen), 1.0)
-    if diagonal_override is not None:
-        diagonal = max(diagonal, float(diagonal_override), 1.0)
-    tolerance = max(diagonal / float(settings["tolerance_divisor"]), float(settings["min_tolerance"]))
+    geometry_diagonal = max(float(bbox.xlen), float(bbox.ylen), float(bbox.zlen), 1.0)
+    render_diagonal = max(geometry_diagonal, float(diagonal_override or 0.0), 1.0)
+    tolerance = max(geometry_diagonal / float(settings["tolerance_divisor"]), float(settings["min_tolerance"]))
     vertices, triangles = compound.tessellate(tolerance)
     if not triangles:
-        return QByteArray(), 0, diagonal
+        return QByteArray(), 0, render_diagonal
 
     max_triangles = int(settings["max_triangles"])
     stride = max(1, math.ceil(len(triangles) / max_triangles))
@@ -144,12 +135,107 @@ def build_mesh_payload(
         payload.extend(struct.pack("6f", *p3, nx, ny, nz))
         vertex_count += 3
 
-    return QByteArray(bytes(payload)), vertex_count, diagonal
+    return QByteArray(bytes(payload)), vertex_count, render_diagonal
+
+
+def build_mesh_payload(
+    assembly: Any,
+    quality: str = "coarse",
+    *,
+    center_override: tuple[float, float, float] | None = None,
+    diagonal_override: float | None = None,
+    progressive_filter: bool = False,
+) -> tuple[QByteArray, int, float]:
+    """Build a Qt3D-ready vertex payload from a CadQuery assembly."""
+
+    settings = MESH_QUALITY_SETTINGS.get(quality, MESH_QUALITY_SETTINGS["coarse"])
+    if not hasattr(assembly, "toCompound"):
+        return QByteArray(), 0, 1.0
+
+    compound = (
+        _progressive_compound(assembly, float(diagonal_override or 0.0))
+        if progressive_filter
+        else assembly.toCompound()
+    )
+    return _mesh_payload_from_compound(
+        compound,
+        quality,
+        center_override=center_override,
+        diagonal_override=diagonal_override,
+    )
+
+
+def build_layer_mesh_payloads(
+    assembly: Any,
+    layer_colors: dict[str, str],
+    quality: str = "coarse",
+) -> list[LayerMeshPayload]:
+    """Build one mesh payload per layer so the 3D preview can color them separately."""
+
+    if not hasattr(assembly, "children"):
+        return []
+
+    try:
+        compound = assembly.toCompound()
+        bbox = compound.BoundingBox()
+    except Exception:
+        return []
+
+    center_override = (
+        float(bbox.xmin + bbox.xmax) / 2.0,
+        float(bbox.ymin + bbox.ymax) / 2.0,
+        float(bbox.zmin + bbox.zmax) / 2.0,
+    )
+    diagonal_override = max(float(bbox.xlen), float(bbox.ylen), float(bbox.zlen), 1.0)
+
+    grouped: dict[str, list[Any]] = {}
+    for child in getattr(assembly, "children", []):
+        metadata = dict(getattr(child, "metadata", {}) or {})
+        layer_name = str(metadata.get("layer") or "0")
+        try:
+            child_compound = child.toCompound()
+        except Exception:
+            continue
+        grouped.setdefault(layer_name, []).append(child_compound)
+
+    payloads: list[LayerMeshPayload] = []
+    for layer_name in sorted(grouped, key=layer_sort_key):
+        compounds = grouped[layer_name]
+        if not compounds:
+            continue
+        layer_compound = compounds[0] if len(compounds) == 1 else cq.Compound.makeCompound(compounds)
+        mesh_bytes, vertex_count, diagonal = _mesh_payload_from_compound(
+            layer_compound,
+            quality,
+            center_override=center_override,
+            diagonal_override=diagonal_override,
+        )
+        if vertex_count <= 0:
+            continue
+        payloads.append(
+            {
+                "layer_name": layer_name,
+                "color_hex": layer_colors.get(layer_name, "#E8E8E8"),
+                "mesh_bytes": mesh_bytes,
+                "vertex_count": vertex_count,
+                "diagonal": diagonal,
+            }
+        )
+
+    return payloads
+
+
+def layer_payload_rgb(payload: LayerMeshPayload) -> tuple[int, int, int]:
+    """Return the RGB tuple for one layer payload."""
+
+    return hex_to_rgb(payload["color_hex"])
 
 
 __all__ = [
     "MESH_QUALITY_SETTINGS",
     "build_mesh_payload",
+    "build_layer_mesh_payloads",
+    "layer_payload_rgb",
     "normalize_vertex",
     "triangle_normal",
 ]

@@ -14,6 +14,13 @@ from .pipeline import (
     prepare_document_from_preview,
 )
 from .pipeline_types import DRCReport, PreparedDocument, RawImportPreview
+from .semantic import (
+    RelationNote,
+    SemanticCandidate,
+    SemanticClassificationResult,
+    SemanticEntity,
+    classify_semantic_layers,
+)
 from .validation.drc import DRCChecker, DRCMode, DRCViolation
 from .validation.igbt_rules import (
     IGBTPadType,
@@ -40,7 +47,11 @@ __all__ = [
     "IGBT_RULES_DEFAULT",
     "IGBT_RULES_HIGH_VOLTAGE",
     "PreparedDocument",
+    "RelationNote",
     "RawImportPreview",
+    "SemanticCandidate",
+    "SemanticClassificationResult",
+    "SemanticEntity",
     "WireLoop",
     "WireType",
     "build_conversion_artifacts",
@@ -51,4 +62,5 @@ __all__ = [
     "load_raw_dxf_entities",
     "prepare_document",
     "prepare_document_from_preview",
+    "classify_semantic_layers",
 ]

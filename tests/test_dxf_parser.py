@@ -64,3 +64,19 @@ def test_parse_document_respects_enabled_layers_and_manual_mapping():
     assert len(elements) == 1
     assert elements[0].element_type == "die_pad"
     assert elements[0].layer == "1_CUSTOM"
+
+
+def test_parse_document_supports_recommended_rule_table_layer_names():
+    document = ezdxf.new("R2010")
+    modelspace = document.modelspace()
+    modelspace.add_lwpolyline(
+        [(0, 0), (2, 0), (2, 1), (0, 1)],
+        close=True,
+        dxfattribs={"layer": "04_pad"},
+    )
+    modelspace.add_line((0, 0), (5, 0), dxfattribs={"layer": "06_wire"})
+
+    parser = DXFParser()
+    elements = parser.parse_document(document)
+
+    assert [element.element_type for element in elements] == ["die_pad", "wire"]

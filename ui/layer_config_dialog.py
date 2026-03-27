@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from core.layer_semantics import format_layer_role
 from core.layer_stack import layer_sort_key
 from core.parsing.dxf import DEFAULT_LAYER_MAPPING
 from core.raw_dxf_types import LayerInfo
@@ -82,7 +83,9 @@ class LayerConfigDialog(QDialog):
 
             layer_item = QTableWidgetItem(layer_name)
             count_item = QTableWidgetItem(str(layer.get("entity_count", 0)))
-            detected_item = QTableWidgetItem(layer.get("mapped_type") or "-")
+            detected_item = QTableWidgetItem(
+                format_layer_role(layer.get("suggested_role") or layer.get("mapped_type"))
+            )
 
             mapping_combo = QComboBox()
             for label, value in LAYER_MAPPING_CHOICES:

@@ -10,6 +10,8 @@ import cadquery as cq
 from PySide6.QtCore import QObject, Signal, Slot
 
 from core import BondingDiagramConverter, PreparedDocument, RawImportPreview, load_import_preview
+from core.layer_colors import build_layer_color_map
+from core.pipeline_types import LayerMeshPayload
 from core.pipeline import finalize_prepared_document, group_elements_by_layer, resolve_preview_elements
 from ui.widgets.mesh_payload import build_mesh_payload
 
@@ -41,8 +43,10 @@ class ImportWorker(QObject):
             elements, used_fallback = resolve_preview_elements(preview, self._config)
             converter = BondingDiagramConverter(self._config)
             layer_groups = group_elements_by_layer(elements)
+            layer_colors = build_layer_color_map(preview["layer_info"], preview["raw_entities"])
             assembly = cq.Assembly()
             converted_counts: Counter[str] = Counter()
+            layer_meshes: list[LayerMeshPayload] = []
             scene_rect = preview["scene_rect"]
             center_override = (
                 float(scene_rect[0] + (scene_rect[2] / 2.0)),
@@ -64,8 +68,17 @@ class ImportWorker(QObject):
                     "coarse",
                     center_override=center_override,
                     diagonal_override=diagonal_override,
-                    progressive_filter=True,
                 )
+                if vertex_count > 0:
+                    layer_meshes.append(
+                        {
+                            "layer_name": layer_name,
+                            "color_hex": layer_colors.get(layer_name, "#E8E8E8"),
+                            "mesh_bytes": mesh_bytes,
+                            "vertex_count": vertex_count,
+                            "diagonal": diagonal,
+                        }
+                    )
                 self.progress_ready.emit(
                     str(self._file_path),
                     {
@@ -73,9 +86,6 @@ class ImportWorker(QObject):
                         "completed_layers": completed_layers,
                         "total_layers": len(layer_groups),
                         "converted_counts": Counter(converted_counts),
-                        "mesh_bytes": mesh_bytes,
-                        "vertex_count": vertex_count,
-                        "diagonal": diagonal,
                     },
                 )
 
@@ -86,6 +96,7 @@ class ImportWorker(QObject):
                 assembly=assembly,
                 used_fallback=used_fallback,
             )
+            prepared["layer_meshes"] = layer_meshes
         except Exception as exc:
             self.failed.emit(str(self._file_path), str(exc))
             return

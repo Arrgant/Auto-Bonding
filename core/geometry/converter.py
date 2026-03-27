@@ -133,7 +133,11 @@ class BondingDiagramConverter:
                 wire_diameter=wire_spec.wire_diameter,
                 material=wire_spec.material,
             )
-            assembly.add(self.create_wire_loop(wire), name=f"wire_{len(assembly.objects)}")
+            assembly.add(
+                self.create_wire_loop(wire),
+                name=f"wire_{len(assembly.objects)}",
+                metadata={"layer": element.layer, "element_type": element.element_type},
+            )
         elif element.element_type == "die_pad":
             pad_spec = resolve_die_pad_spec(element.geometry, element.properties)
             assembly.add(
@@ -147,6 +151,7 @@ class BondingDiagramConverter:
                     radius=pad_spec.radius,
                 ),
                 name=f"die_pad_{len(assembly.objects)}",
+                metadata={"layer": element.layer, "element_type": element.element_type},
             )
         elif element.element_type == "lead_frame":
             lead_frame_spec = resolve_lead_frame_spec(element.geometry, element.properties)
@@ -157,6 +162,7 @@ class BondingDiagramConverter:
                     thickness=lead_frame_spec.thickness,
                 ),
                 name=f"lead_frame_{len(assembly.objects)}",
+                metadata={"layer": element.layer, "element_type": element.element_type},
             )
 
     def append_elements(self, assembly: cq.Assembly, elements: List[BondingElement]) -> cq.Assembly:

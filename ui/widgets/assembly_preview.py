@@ -2,26 +2,23 @@
 
 from __future__ import annotations
 
-from functools import partial
 from typing import Any
 
 from PySide6.Qt3DCore import Qt3DCore
 from PySide6.Qt3DExtras import Qt3DExtras
 from PySide6.Qt3DRender import Qt3DRender
-from PySide6.QtCore import QByteArray, QThread, QTimer, Qt
+from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtGui import QColor, QVector3D
 from PySide6.QtWidgets import QFrame, QLabel, QStackedLayout, QVBoxLayout, QWidget
 
 from services import ProjectDocument
 
-from .mesh_worker import PreviewMeshWorker
+from .mesh_payload import build_layer_mesh_payloads, build_mesh_payload, layer_payload_rgb
 from .viewer_placeholder import ViewerPlaceholder
 
 
 class AssemblyPreviewWidget(QWidget):
     """Hardware-accelerated 3D preview built with Qt3D."""
-
-    FINE_MESH_DELAY_MS = 450
 
     def __init__(self):
         super().__init__()
@@ -47,25 +44,12 @@ class AssemblyPreviewWidget(QWidget):
         self._stack.addWidget(self._container)
 
         self._current_root: Any | None = None
-        self._load_token = 0
-        self._mesh_threads: list[QThread] = []
-        self._mesh_workers: list[PreviewMeshWorker] = []
-        self._loaded_fine_tokens: set[int] = set()
-        self._pending_assembly: Any | None = None
-        self._allow_fine_mesh = True
         self._progressive_mesh_bytes = QByteArray()
         self._progressive_vertex_count = 0
         self._progressive_diagonal = 1.0
-        self._fine_timer = QTimer(self)
-        self._fine_timer.setSingleShot(True)
-        self._fine_timer.timeout.connect(self._start_scheduled_fine_mesh)
         self._empty_scene()
 
     def load_assembly(self, assembly: Any | None, *, progressive: bool = False) -> None:
-        self._load_token += 1
-        self._loaded_fine_tokens.discard(self._load_token)
-        self._fine_timer.stop()
-        self._allow_fine_mesh = not progressive
         self._reset_progressive_mesh()
 
         if assembly is None or not getattr(assembly, "objects", {}):
@@ -73,75 +57,36 @@ class AssemblyPreviewWidget(QWidget):
             self._empty_scene()
             return
 
-        self._pending_assembly = assembly
         self.placeholder.set_content("3D Preview", "Building layer mesh" if progressive else "Generating mesh")
         self._stack.setCurrentWidget(self._placeholder_page)
-        self._start_mesh_job(assembly, "coarse", self._load_token)
+        mesh_bytes, vertex_count, diagonal = build_mesh_payload(assembly, "coarse")
+        self.load_mesh_payload(mesh_bytes, vertex_count, diagonal)
 
-    def _start_mesh_job(self, assembly: Any, quality: str, token: int) -> None:
-        thread = QThread(self)
-        worker = PreviewMeshWorker(assembly, quality, token)
-        worker.moveToThread(thread)
-
-        thread.started.connect(worker.run)
-        worker.mesh_ready.connect(self._handle_mesh_ready)
-        worker.failed.connect(self._handle_mesh_failure)
-        worker.mesh_ready.connect(thread.quit)
-        worker.failed.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(partial(self._cleanup_mesh_job, thread, worker))
-
-        self._mesh_threads.append(thread)
-        self._mesh_workers.append(worker)
-        thread.start()
-
-    def _cleanup_mesh_job(self, thread: QThread, worker: PreviewMeshWorker) -> None:
-        if thread in self._mesh_threads:
-            self._mesh_threads.remove(thread)
-        if worker in self._mesh_workers:
-            self._mesh_workers.remove(worker)
-
-    def _handle_mesh_ready(
-        self,
-        token: int,
-        quality: str,
-        mesh_bytes: Any,
-        vertex_count: int,
-        diagonal: float,
-    ) -> None:
-        if token != self._load_token:
-            return
+    def load_mesh_payload(self, mesh_bytes: QByteArray, vertex_count: int, diagonal: float) -> None:
+        """Load one ready-to-render mesh payload into the Qt3D scene."""
 
         if vertex_count <= 0:
-            if quality == "coarse":
-                self.placeholder.set_content("3D Preview", "Model unavailable")
-                self._empty_scene()
+            self.placeholder.set_content("3D Preview", "Model unavailable")
+            self._empty_scene()
             return
 
         self._current_root = self._build_scene(mesh_bytes, vertex_count, diagonal)
         self._window.setRootEntity(self._current_root)
         self._stack.setCurrentWidget(self._container)
 
-        if quality == "coarse" and self._allow_fine_mesh and token not in self._loaded_fine_tokens:
-            self._loaded_fine_tokens.add(token)
-            self._fine_timer.start(self.FINE_MESH_DELAY_MS)
+    def load_layer_meshes(self, layer_meshes: list[dict[str, Any]]) -> None:
+        """Load one mesh per layer so the preview can color layers independently."""
 
-    def _handle_mesh_failure(self, token: int, quality: str, _message: str) -> None:
-        if token != self._load_token:
-            return
-        if quality == "coarse":
+        valid_layers = [payload for payload in layer_meshes if int(payload.get("vertex_count", 0)) > 0]
+        if not valid_layers:
             self.placeholder.set_content("3D Preview", "Model unavailable")
             self._empty_scene()
-
-    def _start_scheduled_fine_mesh(self) -> None:
-        assembly = self._current_assembly()
-        if assembly is None or self._load_token not in self._loaded_fine_tokens:
             return
-        self._start_mesh_job(assembly, "fine", self._load_token)
 
-    def _current_assembly(self) -> Any | None:
-        return self._pending_assembly
+        diagonal = max(float(payload.get("diagonal", 1.0)) for payload in valid_layers)
+        self._current_root = self._build_layered_scene(valid_layers, diagonal)
+        self._window.setRootEntity(self._current_root)
+        self._stack.setCurrentWidget(self._container)
 
     def append_progressive_mesh(self, mesh_bytes: QByteArray, vertex_count: int, diagonal: float) -> None:
         """Append one coarse mesh chunk during staged import."""
@@ -149,9 +94,6 @@ class AssemblyPreviewWidget(QWidget):
         if vertex_count <= 0:
             return
 
-        self._fine_timer.stop()
-        self._pending_assembly = None
-        self._allow_fine_mesh = False
         self._progressive_mesh_bytes.append(mesh_bytes)
         self._progressive_vertex_count += vertex_count
         self._progressive_diagonal = max(self._progressive_diagonal, float(diagonal), 1.0)
@@ -169,17 +111,61 @@ class AssemblyPreviewWidget(QWidget):
         self._progressive_diagonal = 1.0
 
     def _empty_scene(self) -> None:
-        self._fine_timer.stop()
-        self._pending_assembly = None
-        self._allow_fine_mesh = True
         self._reset_progressive_mesh()
         self._current_root = Qt3DCore.QEntity()
         self._window.setRootEntity(self._current_root)
         self._stack.setCurrentWidget(self._placeholder_page)
 
+    def shutdown(self) -> None:
+        """Tear down the Qt3D scene before the widget is destroyed."""
+
+        self._reset_progressive_mesh()
+        self._current_root = None
+        self._window.setRootEntity(Qt3DCore.QEntity())
+        self._stack.setCurrentWidget(self._placeholder_page)
+
     def _build_scene(self, mesh_bytes: Any, vertex_count: int, diagonal: float) -> Any:
         root = Qt3DCore.QEntity()
+        self._prepare_scene_root(root, diagonal)
 
+        model_entity = Qt3DCore.QEntity(root)
+        geometry = self._create_geometry(model_entity, mesh_bytes, vertex_count)
+        renderer = Qt3DRender.QGeometryRenderer(model_entity)
+        renderer.setGeometry(geometry)
+        renderer.setPrimitiveType(Qt3DRender.QGeometryRenderer.PrimitiveType.Triangles)
+        renderer.setVertexCount(vertex_count)
+
+        material = self._create_material(model_entity, QColor("#D45B2E"))
+
+        model_entity.addComponent(renderer)
+        model_entity.addComponent(material)
+        return root
+
+    def _build_layered_scene(self, layer_meshes: list[dict[str, Any]], diagonal: float) -> Any:
+        root = Qt3DCore.QEntity()
+        self._prepare_scene_root(root, diagonal)
+
+        for payload in layer_meshes:
+            vertex_count = int(payload["vertex_count"])
+            if vertex_count <= 0:
+                continue
+
+            mesh_entity = Qt3DCore.QEntity(root)
+            geometry = self._create_geometry(mesh_entity, payload["mesh_bytes"], vertex_count)
+            renderer = Qt3DRender.QGeometryRenderer(mesh_entity)
+            renderer.setGeometry(geometry)
+            renderer.setPrimitiveType(Qt3DRender.QGeometryRenderer.PrimitiveType.Triangles)
+            renderer.setVertexCount(vertex_count)
+
+            red, green, blue = layer_payload_rgb(payload)
+            material = self._create_material(mesh_entity, QColor(red, green, blue))
+
+            mesh_entity.addComponent(renderer)
+            mesh_entity.addComponent(material)
+
+        return root
+
+    def _prepare_scene_root(self, root: Qt3DCore.QEntity, diagonal: float) -> None:
         self._configure_camera(diagonal)
         controller = Qt3DExtras.QOrbitCameraController(root)
         controller.setCamera(self._window.camera())
@@ -200,22 +186,13 @@ class AssemblyPreviewWidget(QWidget):
         fill_light.setWorldDirection(QVector3D(0.45, 0.2, -0.35))
         fill_light_entity.addComponent(fill_light)
 
-        model_entity = Qt3DCore.QEntity(root)
-        geometry = self._create_geometry(model_entity, mesh_bytes, vertex_count)
-        renderer = Qt3DRender.QGeometryRenderer(model_entity)
-        renderer.setGeometry(geometry)
-        renderer.setPrimitiveType(Qt3DRender.QGeometryRenderer.PrimitiveType.Triangles)
-        renderer.setVertexCount(vertex_count)
-
-        material = Qt3DExtras.QPhongMaterial(model_entity)
-        material.setAmbient(QColor("#4B170B"))
-        material.setDiffuse(QColor("#D45B2E"))
-        material.setSpecular(QColor("#FFD9C5"))
+    def _create_material(self, parent: Qt3DCore.QEntity, base_color: QColor) -> Qt3DExtras.QPhongMaterial:
+        material = Qt3DExtras.QPhongMaterial(parent)
+        material.setAmbient(base_color.darker(210))
+        material.setDiffuse(base_color)
+        material.setSpecular(base_color.lighter(180))
         material.setShininess(55.0)
-
-        model_entity.addComponent(renderer)
-        model_entity.addComponent(material)
-        return root
+        return material
 
     def _configure_camera(self, diagonal: float) -> None:
         camera = self._window.camera()
@@ -286,7 +263,29 @@ class ModelPreviewPanel(QFrame):
             self.surface.load_assembly(None)
             return
 
-        self.surface.load_assembly(document.stack_preview_assembly or document.assembly, progressive=progressive)
+        if document.stack_preview_assembly is not None:
+            layer_meshes = build_layer_mesh_payloads(document.stack_preview_assembly, document.layer_colors)
+            if layer_meshes:
+                self.surface.load_layer_meshes(layer_meshes)
+            else:
+                self.surface.load_assembly(document.stack_preview_assembly, progressive=progressive)
+            return
+
+        if document.layer_meshes:
+            self.surface.load_layer_meshes(document.layer_meshes)
+            return
+
+        if document.mesh_bytes is not None and document.mesh_vertex_count > 0:
+            self.surface.load_mesh_payload(
+                document.mesh_bytes,
+                document.mesh_vertex_count,
+                document.mesh_diagonal,
+            )
+        else:
+            self.surface.load_assembly(document.assembly, progressive=progressive)
 
     def append_progressive_mesh(self, mesh_bytes: QByteArray, vertex_count: int, diagonal: float) -> None:
         self.surface.append_progressive_mesh(mesh_bytes, vertex_count, diagonal)
+
+    def shutdown(self) -> None:
+        self.surface.shutdown()

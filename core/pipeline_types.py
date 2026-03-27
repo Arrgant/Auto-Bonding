@@ -8,6 +8,7 @@ from typing import Any, NotRequired, TypedDict
 from .export.coordinates import BondPoint
 from .geometry.converter import BondingElement
 from .raw_dxf_types import LayerInfo, RawEntity, SceneRect
+from .semantic import SemanticClassificationResult
 
 
 class DRCReport(TypedDict):
@@ -29,6 +30,17 @@ class RawImportPreview(TypedDict):
     raw_counts: Counter[str]
     layer_info: list[LayerInfo]
     parser_elements: list[BondingElement]
+    semantic_result: SemanticClassificationResult
+
+
+class LayerMeshPayload(TypedDict):
+    """Typed mesh payload for one preview layer."""
+
+    layer_name: str
+    color_hex: str
+    mesh_bytes: Any
+    vertex_count: int
+    diagonal: float
 
 
 class PreparedDocument(TypedDict):
@@ -39,13 +51,18 @@ class PreparedDocument(TypedDict):
     raw_counts: Counter[str]
     layer_info: list[LayerInfo]
     parser_elements: list[BondingElement]
+    semantic_result: SemanticClassificationResult
     elements: list[BondingElement]
     converted_counts: Counter[str]
     coordinates: list[BondPoint]
     drc_report: DRCReport
     assembly: Any
+    layer_meshes: NotRequired[list[LayerMeshPayload]]
+    mesh_bytes: NotRequired[Any]
+    mesh_vertex_count: NotRequired[int]
+    mesh_diagonal: NotRequired[float]
     used_fallback: bool
     note: str
 
 
-__all__ = ["DRCReport", "PreparedDocument", "RawImportPreview"]
+__all__ = ["DRCReport", "LayerMeshPayload", "PreparedDocument", "RawImportPreview"]

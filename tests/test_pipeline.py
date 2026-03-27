@@ -31,6 +31,7 @@ def test_prepare_document_returns_complete_payload(tmp_path):
         "raw_counts",
         "layer_info",
         "parser_elements",
+        "semantic_result",
         "elements",
         "converted_counts",
         "coordinates",
@@ -65,6 +66,7 @@ def test_preview_stage_can_be_promoted_to_prepared_document(tmp_path):
     assert payload["raw_counts"]["LINE"] == 1
     assert payload["raw_entities"] == preview["raw_entities"]
     assert payload["scene_rect"] == preview["scene_rect"]
+    assert payload["semantic_result"] == preview["semantic_result"]
 
 
 def test_group_elements_by_layer_uses_numeric_first_sort():

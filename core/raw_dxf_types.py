@@ -59,6 +59,7 @@ class LayerInfo(TypedDict):
     is_visible: bool
     plot: bool
     mapped_type: str | None
+    suggested_role: NotRequired[str | None]
     enabled: NotRequired[bool]
     entity_count: int
     entity_types: dict[str, int]

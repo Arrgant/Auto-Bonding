@@ -5,7 +5,7 @@ from __future__ import annotations
 import cadquery as cq
 import pytest
 
-from ui.widgets.mesh_payload import build_mesh_payload
+from ui.widgets.mesh_payload import build_layer_mesh_payloads, build_mesh_payload
 
 
 def test_build_mesh_payload_supports_coarse_and_fine_quality():
@@ -38,6 +38,22 @@ def test_build_mesh_payload_supports_shared_center_override():
     assert mesh_bytes.size() > 0
 
 
+def test_build_mesh_payload_keeps_local_tessellation_when_diagonal_is_overridden():
+    assembly = cq.Assembly()
+    assembly.add(cq.Workplane().box(10.0, 6.0, 2.0), name="box")
+
+    base_bytes, base_vertices, _ = build_mesh_payload(assembly, "coarse")
+    override_bytes, override_vertices, override_diagonal = build_mesh_payload(
+        assembly,
+        "coarse",
+        diagonal_override=200.0,
+    )
+
+    assert base_vertices == override_vertices
+    assert base_bytes.size() == override_bytes.size()
+    assert override_diagonal >= 200.0
+
+
 def test_build_mesh_payload_can_filter_dense_progressive_children():
     assembly = cq.Assembly()
     assembly.add(cq.Workplane().box(20.0, 20.0, 2.0), name="large_box")
@@ -59,3 +75,26 @@ def test_build_mesh_payload_can_filter_dense_progressive_children():
     assert filtered_vertices > 0
     assert filtered_vertices < full_vertices
     assert filtered_bytes.size() < full_bytes.size()
+
+
+def test_build_layer_mesh_payloads_keep_distinct_layer_colors():
+    assembly = cq.Assembly()
+    assembly.add(
+        cq.Workplane().box(10.0, 6.0, 2.0),
+        name="layer_one_box",
+        metadata={"layer": "01_base"},
+    )
+    assembly.add(
+        cq.Workplane().center(0.0, 0.0).box(4.0, 4.0, 1.0),
+        name="layer_two_box",
+        metadata={"layer": "02_top"},
+    )
+
+    layer_meshes = build_layer_mesh_payloads(
+        assembly,
+        {"01_base": "#FF8A65", "02_top": "#4DD0E1"},
+    )
+
+    assert [payload["layer_name"] for payload in layer_meshes] == ["01_base", "02_top"]
+    assert layer_meshes[0]["color_hex"] != layer_meshes[1]["color_hex"]
+    assert all(payload["vertex_count"] > 0 for payload in layer_meshes)

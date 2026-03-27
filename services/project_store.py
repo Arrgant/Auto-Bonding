@@ -9,8 +9,9 @@ from typing import Any
 
 from core.export.coordinates import BondPoint
 from core.geometry.converter import BondingElement
-from core.pipeline_types import DRCReport
+from core.pipeline_types import DRCReport, LayerMeshPayload
 from core.raw_dxf_types import LayerInfo, RawEntity, SceneRect
+from core.semantic import SemanticClassificationResult
 
 LayerOverride = dict[str, bool | str | None]
 
@@ -25,13 +26,21 @@ class ProjectDocument:
     scene_rect: SceneRect
     raw_counts: Counter[str]
     layer_info: list[LayerInfo] = field(default_factory=list)
+    semantic_result: SemanticClassificationResult | None = None
+    semantic_overrides: dict[str, str] = field(default_factory=dict)
+    layer_semantic_overrides: dict[str, str] = field(default_factory=dict)
     enabled_layers: set[str] = field(default_factory=set)
+    visible_layers: set[str] = field(default_factory=set)
     layer_mapping_overrides: dict[str, str] = field(default_factory=dict)
+    layer_colors: dict[str, str] = field(default_factory=dict)
     parser_elements: list[BondingElement] = field(default_factory=list)
     converted_counts: Counter[str] = field(default_factory=Counter)
     coordinates: list[BondPoint] = field(default_factory=list)
+    layer_thicknesses: dict[str, float] = field(default_factory=dict)
     entity_thicknesses: dict[int, float] = field(default_factory=dict)
+    selected_layer_name: str | None = None
     selected_entity_index: int | None = None
+    selected_semantic_key: str | None = None
     drc_report: DRCReport = field(
         default_factory=lambda: {
             "passed": True,
@@ -42,6 +51,10 @@ class ProjectDocument:
         }
     )
     assembly: Any | None = None
+    layer_meshes: list[LayerMeshPayload] = field(default_factory=list)
+    mesh_bytes: Any | None = None
+    mesh_vertex_count: int = 0
+    mesh_diagonal: float = 1.0
     stack_preview_assembly: Any | None = None
     output_path: Path | None = None
     status: str = "ready"

@@ -73,23 +73,35 @@ def build_stacked_preview_assembly(
     raw_entities: list[RawEntity],
     layer_info: list[LayerInfo],
     entity_thicknesses: dict[int, float],
+    *,
+    layer_thicknesses: dict[str, float] | None = None,
+    visible_layers: set[str] | None = None,
 ) -> cq.Assembly | None:
     """Build a simple per-layer stacked preview assembly from selected closed entities."""
 
     positive_assignments = {index: float(thickness) for index, thickness in entity_thicknesses.items() if thickness > 0}
-    if not positive_assignments:
+    positive_layer_assignments = {
+        str(layer_name): float(thickness)
+        for layer_name, thickness in (layer_thicknesses or {}).items()
+        if thickness > 0
+    }
+    visible_layer_filter = set(visible_layers) if visible_layers is not None else None
+
+    if not positive_assignments and not positive_layer_assignments:
         return None
 
     layer_order = build_layer_order_map(layer_info, raw_entities)
     entities_by_layer: dict[str, list[tuple[int, RawEntity, float]]] = defaultdict(list)
 
-    for entity_index, thickness in positive_assignments.items():
-        if entity_index < 0 or entity_index >= len(raw_entities):
+    for entity_index, entity in enumerate(raw_entities):
+        layer_name = str(entity.get("layer", "0"))
+        if visible_layer_filter is not None and layer_name not in visible_layer_filter:
             continue
-        entity = raw_entities[entity_index]
         if not _is_supported_closed_entity(entity):
             continue
-        layer_name = str(entity.get("layer", "0"))
+        thickness = positive_assignments.get(entity_index, positive_layer_assignments.get(layer_name, 0.0))
+        if thickness <= 0:
+            continue
         entities_by_layer[layer_name].append((entity_index, entity, thickness))
 
     if not entities_by_layer:
@@ -105,7 +117,11 @@ def build_stacked_preview_assembly(
         for entity_index, entity, thickness in layer_entities:
             solid = _build_entity_solid(entity, thickness, current_z)
             if solid is not None:
-                assembly.add(solid, name=f"layer_{layer_order.get(layer_name, 0)}_entity_{entity_index}")
+                assembly.add(
+                    solid,
+                    name=f"layer_{layer_order.get(layer_name, 0)}_entity_{entity_index}",
+                    metadata={"layer": layer_name, "source_index": entity_index},
+                )
         current_z += layer_height
 
     return assembly if getattr(assembly, "objects", {}) else None

@@ -7,6 +7,7 @@ from typing import Any
 import ezdxf
 
 from ..geometry.converter import BondingElement
+from ..layer_semantics import RECOMMENDED_IMPORT_MAPPING
 from .dxf_entities import (
     expand_polyline_points,
     parse_dxf_entity,
@@ -22,6 +23,7 @@ DEFAULT_LAYER_MAPPING: dict[str, str] = {
     "LF": "lead_frame",
     "BOND": "bond_point",
     "FINGER": "lead_frame",
+    **RECOMMENDED_IMPORT_MAPPING,
 }
 
 

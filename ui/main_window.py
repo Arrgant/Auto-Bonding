@@ -26,12 +26,22 @@ from PySide6.QtWidgets import (
 )
 
 from core import BondingDiagramConverter, CoordinateExporter, PreparedDocument, RawImportPreview
+from core.layer_colors import build_layer_color_map
+from core.layer_semantics import apply_layer_role_overrides
 from core.layer_stack import build_stacked_preview_assembly
-from services import ProjectDocument
+from core.semantic import (
+    MANUAL_REVIEW_KIND_OPTIONS,
+    SemanticClassificationResult,
+    apply_manual_semantic_overrides,
+    classify_semantic_layers,
+    manual_override_entity_key,
+)
+from services import LayerSemanticPresetStore, ProjectDocument
 
 from .import_worker import ImportWorker
 from .layer_config_dialog import LayerConfigDialog
-from .widgets import DXFPreviewView, ModelPreviewPanel
+from .layer_semantic_preset_dialog import LayerSemanticPresetDialog
+from .widgets import DXFPreviewView, LayerManagerPanel, ModelPreviewPanel, SemanticObjectsPanel
 
 
 class MainWindow(QMainWindow):
@@ -43,6 +53,7 @@ class MainWindow(QMainWindow):
         self.output_directory = Path.cwd() / "output"
         self.output_directory.mkdir(exist_ok=True)
         self.exporter = CoordinateExporter()
+        self.layer_semantic_store = LayerSemanticPresetStore()
         self._import_thread: QThread | None = None
         self._import_worker: ImportWorker | None = None
         self._pending_import_config: dict[str, Any] | None = None
@@ -76,8 +87,27 @@ class MainWindow(QMainWindow):
         left_title.setObjectName("SectionTitle")
         left_layout.addWidget(left_title)
 
+        left_body = QWidget()
+        left_body_layout = QHBoxLayout(left_body)
+        left_body_layout.setContentsMargins(0, 0, 0, 0)
+        left_body_layout.setSpacing(12)
+
+        sidebar = QWidget()
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(12)
+
+        self.layer_panel = LayerManagerPanel()
+        sidebar_layout.addWidget(self.layer_panel, stretch=1)
+
+        self.semantic_panel = SemanticObjectsPanel()
+        sidebar_layout.addWidget(self.semantic_panel, stretch=1)
+
+        left_body_layout.addWidget(sidebar)
+
         self.preview = DXFPreviewView()
-        left_layout.addWidget(self.preview, stretch=1)
+        left_body_layout.addWidget(self.preview, stretch=1)
+        left_layout.addWidget(left_body, stretch=1)
         split.addWidget(left_panel)
 
         self.model_preview = ModelPreviewPanel()
@@ -87,6 +117,12 @@ class MainWindow(QMainWindow):
         self.preview.file_drop_handler = self._load_document
         self.preview.selection_changed_handler = self._handle_preview_selection
         self.preview.closed_shape_click_handler = self._configure_shape_thickness
+        self.layer_panel.layer_visibility_changed.connect(self._handle_layer_visibility_changed)
+        self.layer_panel.layer_selected.connect(self._handle_layer_selected)
+        self.layer_panel.layer_thickness_requested.connect(self._edit_layer_thickness)
+        self.semantic_panel.semantic_item_selected.connect(self._handle_semantic_item_selected)
+        self.semantic_panel.review_override_requested.connect(self._handle_review_override_requested)
+        self.semantic_panel.preset_manage_requested.connect(self._open_semantic_preset_manager)
 
         self.status_label = QLabel("Ready")
         self.progress = QProgressBar()
@@ -251,6 +287,40 @@ class MainWindow(QMainWindow):
             QMenu::item:selected {
                 background: #E53935;
             }
+            QTreeWidget {
+                background: #202020;
+                border: 1px solid #303030;
+                border-radius: 8px;
+                alternate-background-color: #252525;
+            }
+            QTreeWidget::item:selected {
+                background: #7A1D1B;
+                color: #FFFFFF;
+            }
+            QHeaderView::section {
+                background: #262626;
+                color: #BEBEBE;
+                border: none;
+                border-bottom: 1px solid #313131;
+                padding: 4px 6px;
+            }
+            QTabWidget::pane {
+                border: none;
+            }
+            QTabBar::tab {
+                background: #202020;
+                color: #BEBEBE;
+                padding: 6px 10px;
+                border: 1px solid #303030;
+                border-bottom: none;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                margin-right: 4px;
+            }
+            QTabBar::tab:selected {
+                background: #2A2A2A;
+                color: #FFFFFF;
+            }
             QStatusBar { background: #202020; border-top: 1px solid #2E2E2E; color: #A8A8A8; }
             """
         )
@@ -339,6 +409,21 @@ class MainWindow(QMainWindow):
 
         self._load_document(self.document.path, layer_settings=payload)
 
+    def _open_semantic_preset_manager(self) -> None:
+        dialog = LayerSemanticPresetDialog(self.layer_semantic_store.list_presets(), self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+
+        updated_presets = dialog.result_presets()
+        before = self.layer_semantic_store.list_presets()
+        if updated_presets == before:
+            return
+
+        self.layer_semantic_store.replace_presets(updated_presets)
+        self.status_label.setText(
+            "Semantic presets updated. Re-import the DXF to apply changes to the current session."
+        )
+
     def _should_preserve_user_state(
         self,
         previous_document: ProjectDocument | None,
@@ -354,6 +439,87 @@ class MainWindow(QMainWindow):
             and previous_document.layer_mapping_overrides == layer_mapping_overrides
         )
 
+    def _default_visible_layers(self, layer_info: list[dict[str, Any]]) -> set[str]:
+        return {
+            str(layer["name"])
+            for layer in layer_info
+            if layer.get("enabled", True) and layer.get("entity_count", 0) > 0
+        }
+
+    def _resolve_semantic_state(
+        self,
+        raw_entities: list[dict[str, Any]],
+        layer_info: list[dict[str, Any]],
+        base_result: SemanticClassificationResult,
+        previous_document: ProjectDocument | None,
+        preserve_user_state: bool,
+    ) -> tuple[list[dict[str, Any]], SemanticClassificationResult, dict[str, str], dict[str, str], str | None]:
+        layer_semantic_overrides = self.layer_semantic_store.resolve_for_layers(layer_info)
+        semantic_overrides: dict[str, str] = {}
+        selected_semantic_key: str | None = None
+
+        if preserve_user_state and previous_document is not None:
+            layer_semantic_overrides.update(previous_document.layer_semantic_overrides)
+            semantic_overrides = dict(previous_document.semantic_overrides)
+            selected_semantic_key = previous_document.selected_semantic_key
+
+        resolved_layer_info = apply_layer_role_overrides(layer_info, layer_semantic_overrides)
+        semantic_result = (
+            classify_semantic_layers(raw_entities, resolved_layer_info)
+            if layer_semantic_overrides
+            else base_result
+        )
+        semantic_result = apply_manual_semantic_overrides(semantic_result, semantic_overrides)
+        return (
+            resolved_layer_info,
+            semantic_result,
+            semantic_overrides,
+            layer_semantic_overrides,
+            selected_semantic_key,
+        )
+
+    def _find_semantic_selection(
+        self,
+        result: SemanticClassificationResult,
+        *,
+        layer_name: str | None,
+        source_indices: tuple[int, ...],
+        preferred_kind: str,
+    ) -> tuple[str | None, object | None]:
+        if not source_indices:
+            return None, None
+
+        for entity in result.entities:
+            if (
+                entity.layer_name == layer_name
+                and entity.source_indices == source_indices
+                and entity.kind == preferred_kind
+            ):
+                return f"entity:{entity.id}", entity
+
+        for entity in result.entities:
+            if entity.layer_name == layer_name and entity.source_indices == source_indices:
+                return f"entity:{entity.id}", entity
+
+        for candidate in result.review:
+            if candidate.layer_name == layer_name and candidate.source_indices == source_indices:
+                return f"review:{candidate.id}", candidate
+
+        return None, None
+
+    def _rebuild_stack_preview(self) -> None:
+        if self.document is None:
+            return
+
+        self.document.stack_preview_assembly = build_stacked_preview_assembly(
+            self.document.raw_entities,
+            self.document.layer_info,
+            self.document.entity_thicknesses,
+            layer_thicknesses=self.document.layer_thicknesses,
+            visible_layers=self.document.visible_layers,
+        )
+        self.model_preview.load_document(self.document)
+
     def _handle_import_preview(self, file_path_str: str, preview: RawImportPreview) -> None:
         file_path = Path(file_path_str)
         previous_document = self.document if self.document and self.document.path == file_path else None
@@ -364,7 +530,30 @@ class MainWindow(QMainWindow):
             enabled_layers = {
                 str(layer["name"]) for layer in preview["layer_info"] if layer.get("enabled", True)
             }
+        active_layers = self._default_visible_layers(preview["layer_info"])
+        visible_layers = set(previous_document.visible_layers) if preserve_user_state and previous_document else set(active_layers)
+        visible_layers &= active_layers
+        if not visible_layers:
+            visible_layers = set(active_layers)
         layer_mapping_overrides = dict(import_config.get("layer_mapping_overrides", {}))
+        (
+            resolved_layer_info,
+            semantic_result,
+            semantic_overrides,
+            layer_semantic_overrides,
+            selected_semantic_key,
+        ) = self._resolve_semantic_state(
+            preview["raw_entities"],
+            preview["layer_info"],
+            preview["semantic_result"],
+            previous_document,
+            preserve_user_state,
+        )
+        active_layers = self._default_visible_layers(resolved_layer_info)
+        visible_layers &= active_layers
+        if not visible_layers:
+            visible_layers = set(active_layers)
+        layer_colors = build_layer_color_map(resolved_layer_info, preview["raw_entities"])
 
         self.document = ProjectDocument(
             path=file_path,
@@ -372,14 +561,36 @@ class MainWindow(QMainWindow):
             raw_entities=preview["raw_entities"],
             scene_rect=preview["scene_rect"],
             raw_counts=preview["raw_counts"],
-            layer_info=preview["layer_info"],
+            layer_info=resolved_layer_info,
+            semantic_result=semantic_result,
+            semantic_overrides=semantic_overrides,
+            layer_semantic_overrides=layer_semantic_overrides,
             enabled_layers=enabled_layers,
+            visible_layers=visible_layers,
             layer_mapping_overrides=layer_mapping_overrides,
+            layer_colors=layer_colors,
             parser_elements=preview["parser_elements"],
             converted_counts=Counter(previous_document.converted_counts) if preserve_user_state and previous_document else Counter(),
             coordinates=previous_document.coordinates if preserve_user_state and previous_document else [],
+            layer_thicknesses=(
+                {
+                    layer_name: thickness
+                    for layer_name, thickness in previous_document.layer_thicknesses.items()
+                    if layer_name in active_layers
+                }
+                if preserve_user_state and previous_document
+                else {}
+            ),
             entity_thicknesses=dict(previous_document.entity_thicknesses) if preserve_user_state and previous_document else {},
+            selected_layer_name=(
+                previous_document.selected_layer_name
+                if preserve_user_state
+                and previous_document
+                and previous_document.selected_layer_name in active_layers
+                else None
+            ),
             selected_entity_index=previous_document.selected_entity_index if preserve_user_state and previous_document else None,
+            selected_semantic_key=selected_semantic_key,
             drc_report=(
                 previous_document.drc_report
                 if preserve_user_state and previous_document
@@ -392,6 +603,10 @@ class MainWindow(QMainWindow):
                 }
             ),
             assembly=None,
+            layer_meshes=[],
+            mesh_bytes=None,
+            mesh_vertex_count=0,
+            mesh_diagonal=1.0,
             stack_preview_assembly=previous_document.stack_preview_assembly if preserve_user_state and previous_document else None,
             status="preview-ready",
             note="2D preview ready. Building 3D model in background.",
@@ -406,6 +621,8 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.setValue(35)
         self.preview.load_document(self.document)
+        self.layer_panel.load_document(self.document)
+        self.semantic_panel.load_document(self.document)
         self.model_preview.load_document(self.document)
 
     def _handle_import_progress(self, file_path_str: str, progress_payload: dict[str, Any]) -> None:
@@ -440,7 +657,30 @@ class MainWindow(QMainWindow):
             enabled_layers = {
                 str(layer["name"]) for layer in prepared["layer_info"] if layer.get("enabled", True)
             }
+        active_layers = self._default_visible_layers(prepared["layer_info"])
+        visible_layers = set(previous_document.visible_layers) if preserve_user_state and previous_document else set(active_layers)
+        visible_layers &= active_layers
+        if not visible_layers:
+            visible_layers = set(active_layers)
         layer_mapping_overrides = dict(import_config.get("layer_mapping_overrides", {}))
+        (
+            resolved_layer_info,
+            semantic_result,
+            semantic_overrides,
+            layer_semantic_overrides,
+            selected_semantic_key,
+        ) = self._resolve_semantic_state(
+            prepared["raw_entities"],
+            prepared["layer_info"],
+            prepared["semantic_result"],
+            previous_document,
+            preserve_user_state,
+        )
+        active_layers = self._default_visible_layers(resolved_layer_info)
+        visible_layers &= active_layers
+        if not visible_layers:
+            visible_layers = set(active_layers)
+        layer_colors = build_layer_color_map(resolved_layer_info, prepared["raw_entities"])
 
         self.document = ProjectDocument(
             path=file_path,
@@ -448,16 +688,42 @@ class MainWindow(QMainWindow):
             raw_entities=prepared["raw_entities"],
             scene_rect=prepared["scene_rect"],
             raw_counts=prepared["raw_counts"],
-            layer_info=prepared["layer_info"],
+            layer_info=resolved_layer_info,
+            semantic_result=semantic_result,
+            semantic_overrides=semantic_overrides,
+            layer_semantic_overrides=layer_semantic_overrides,
             enabled_layers=enabled_layers,
+            visible_layers=visible_layers,
             layer_mapping_overrides=layer_mapping_overrides,
+            layer_colors=layer_colors,
             parser_elements=prepared["parser_elements"],
             converted_counts=prepared["converted_counts"],
             coordinates=prepared["coordinates"],
+            layer_thicknesses=(
+                {
+                    layer_name: thickness
+                    for layer_name, thickness in previous_document.layer_thicknesses.items()
+                    if layer_name in active_layers
+                }
+                if preserve_user_state and previous_document
+                else {}
+            ),
             entity_thicknesses=dict(previous_document.entity_thicknesses) if preserve_user_state and previous_document else {},
+            selected_layer_name=(
+                previous_document.selected_layer_name
+                if preserve_user_state
+                and previous_document
+                and previous_document.selected_layer_name in active_layers
+                else None
+            ),
             selected_entity_index=previous_document.selected_entity_index if preserve_user_state and previous_document else None,
+            selected_semantic_key=selected_semantic_key,
             drc_report=prepared["drc_report"],
             assembly=prepared["assembly"],
+            layer_meshes=list(prepared.get("layer_meshes", [])),
+            mesh_bytes=prepared.get("mesh_bytes"),
+            mesh_vertex_count=int(prepared.get("mesh_vertex_count", 0)),
+            mesh_diagonal=float(prepared.get("mesh_diagonal", 1.0)),
             stack_preview_assembly=previous_document.stack_preview_assembly if preserve_user_state and previous_document else None,
             status="ready",
             used_fallback=prepared["used_fallback"],
@@ -503,8 +769,21 @@ class MainWindow(QMainWindow):
             self._import_worker = None
         self._pending_import_config = None
 
+    def closeEvent(self, event) -> None:  # pragma: no cover - GUI teardown path
+        if self._import_worker is not None:
+            try:
+                self._import_worker.failed.disconnect(self._finish_import_thread)
+                self._import_worker.finished.disconnect(self._finish_import_thread)
+            except (RuntimeError, TypeError):
+                pass
+        self._finish_import_thread()
+        self.model_preview.shutdown()
+        super().closeEvent(event)
+
     def _update_ui(self) -> None:
         self.preview.load_document(self.document)
+        self.layer_panel.load_document(self.document)
+        self.semantic_panel.load_document(self.document)
         self.model_preview.load_document(self.document)
         self.layers_button.setEnabled(self.document is not None and self._import_thread is None)
         self.export_button.setEnabled(bool(self.document and self.document.assembly))
@@ -527,6 +806,136 @@ class MainWindow(QMainWindow):
             )
         else:
             self.status_label.setText(f"Selected {entity_type} on layer {layer_name}")
+
+    def _handle_semantic_item_selected(self, payload: object) -> None:
+        if self.document is None:
+            return
+
+        if not isinstance(payload, dict):
+            self.document.selected_semantic_key = None
+            return
+
+        semantic_item = payload.get("item")
+        semantic_key = payload.get("key")
+        if semantic_item is None or not isinstance(semantic_key, str):
+            self.document.selected_semantic_key = None
+            return
+
+        layer_name = getattr(semantic_item, "layer_name", None)
+        source_indices = tuple(getattr(semantic_item, "source_indices", ()) or ())
+        selected_index = source_indices[0] if source_indices else None
+        visibility_changed = False
+
+        if isinstance(layer_name, str) and layer_name:
+            if layer_name not in self.document.visible_layers:
+                self.document.visible_layers.add(layer_name)
+                visibility_changed = True
+            self.document.selected_layer_name = layer_name
+
+        self.document.selected_semantic_key = semantic_key
+        self.document.selected_entity_index = selected_index
+
+        if visibility_changed and (
+            self.document.stack_preview_assembly is not None
+            or self.document.layer_thicknesses
+            or self.document.entity_thicknesses
+        ):
+            self._rebuild_stack_preview()
+
+        self.preview.load_document(self.document)
+        self.preview.focus_entity(selected_index)
+        self.layer_panel.load_document(self.document)
+        self.semantic_panel.load_document(self.document)
+
+        kind_label = getattr(semantic_item, "kind", "object")
+        kind_label = str(kind_label).removesuffix("_candidate").replace("_", " ")
+        if isinstance(layer_name, str) and layer_name:
+            self.status_label.setText(
+                f"Selected {kind_label} on layer {layer_name}"
+            )
+        else:
+            self.status_label.setText(f"Selected {kind_label}")
+
+    def _handle_review_override_requested(self, payload: object) -> None:
+        if self.document is None or self.document.semantic_result is None:
+            return
+        if not isinstance(payload, dict):
+            return
+
+        semantic_item = payload.get("item")
+        if semantic_item is None:
+            return
+
+        candidate_id = getattr(semantic_item, "id", None)
+        kind_label = str(getattr(semantic_item, "kind", "review")).removesuffix("_candidate").replace("_", " ")
+        if not isinstance(candidate_id, str):
+            return
+
+        options = [kind.replace("_", " ").title() for kind in MANUAL_REVIEW_KIND_OPTIONS]
+        current_index = 0
+        selected_label, accepted = QInputDialog.getItem(
+            self,
+            "Classify review item",
+            f"Assign semantic class for {kind_label}:",
+            options,
+            current_index,
+            False,
+        )
+        if not accepted or not selected_label:
+            return
+
+        target_kind = selected_label.lower().replace(" ", "_")
+        layer_name = getattr(semantic_item, "layer_name", None)
+        source_indices = tuple(getattr(semantic_item, "source_indices", ()) or ())
+        self.document.semantic_overrides[candidate_id] = target_kind
+        sync_answer = QMessageBox.question(
+            self,
+            "Sync layer semantic role",
+            (
+                f"Use {selected_label} as the default semantic role for layer "
+                f"'{layer_name}' in this DXF session?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if sync_answer == QMessageBox.StandardButton.Yes and isinstance(layer_name, str) and layer_name:
+            self.document.layer_semantic_overrides[layer_name] = target_kind
+            self.layer_semantic_store.remember_layer_role(layer_name, target_kind)
+
+        self.document.layer_info = apply_layer_role_overrides(
+            self.document.layer_info,
+            self.document.layer_semantic_overrides,
+        )
+        base_semantic_result = classify_semantic_layers(self.document.raw_entities, self.document.layer_info)
+        self.document.semantic_result = apply_manual_semantic_overrides(
+            base_semantic_result,
+            self.document.semantic_overrides,
+        )
+        selected_key, selected_item = self._find_semantic_selection(
+            self.document.semantic_result,
+            layer_name=layer_name if isinstance(layer_name, str) else None,
+            source_indices=source_indices,
+            preferred_kind=target_kind,
+        )
+        if selected_key is None:
+            selected_key = manual_override_entity_key(candidate_id, target_kind)
+            selected_item = next(
+                (
+                    entity
+                    for entity in self.document.semantic_result.entities
+                    if entity.id == selected_key.removeprefix("entity:")
+                ),
+                None,
+            )
+
+        self.document.selected_semantic_key = selected_key
+        self.layer_panel.load_document(self.document)
+        self.semantic_panel.load_document(self.document)
+        if selected_key and selected_item is not None:
+            self._handle_semantic_item_selected({"key": selected_key, "item": selected_item})
+        self.status_label.setText(
+            f"Review item classified as {target_kind.replace('_', ' ')}"
+        )
 
     def _configure_shape_thickness(self, entity_index: int) -> None:
         if self.document is None or entity_index >= len(self.document.raw_entities):
@@ -558,18 +967,75 @@ class MainWindow(QMainWindow):
         else:
             self.document.entity_thicknesses[entity_index] = thickness
 
-        self.document.stack_preview_assembly = build_stacked_preview_assembly(
-            self.document.raw_entities,
-            self.document.layer_info,
-            self.document.entity_thicknesses,
-        )
-        self.model_preview.load_document(self.document)
+        self._rebuild_stack_preview()
 
         layer_name = entity.get("layer", "0")
         if thickness <= 0:
             self.status_label.setText(f"Cleared thickness for layer {layer_name}")
         else:
             self.status_label.setText(f"Thickness set: {layer_name} -> {thickness:.3f} mm")
+
+    def _handle_layer_visibility_changed(self, layer_name: str, visible: bool) -> None:
+        if self.document is None:
+            return
+
+        if visible:
+            self.document.visible_layers.add(layer_name)
+        else:
+            self.document.visible_layers.discard(layer_name)
+            if self.document.selected_layer_name == layer_name:
+                self.document.selected_layer_name = None
+
+        self.preview.load_document(self.document)
+        self.layer_panel.load_document(self.document)
+        if self.document.stack_preview_assembly is not None or self.document.layer_thicknesses or self.document.entity_thicknesses:
+            self._rebuild_stack_preview()
+
+    def _handle_layer_selected(self, layer_name: object) -> None:
+        if self.document is None:
+            return
+
+        normalized = str(layer_name) if isinstance(layer_name, str) else None
+        self.document.selected_layer_name = normalized
+        self.preview.load_document(self.document)
+        if normalized is None:
+            self.status_label.setText(f"{self.document.path.name} | layer focus cleared")
+            return
+
+        thickness = self.document.layer_thicknesses.get(normalized)
+        if thickness is None:
+            self.status_label.setText(f"Layer selected: {normalized}")
+        else:
+            self.status_label.setText(f"Layer selected: {normalized} | thickness {thickness:.3f} mm")
+
+    def _edit_layer_thickness(self, layer_name: str) -> None:
+        if self.document is None:
+            return
+
+        current = float(self.document.layer_thicknesses.get(layer_name, 0.2))
+        thickness, accepted = QInputDialog.getDouble(
+            self,
+            "Set layer thickness",
+            f"Thickness for layer {layer_name}",
+            current,
+            0.0,
+            50.0,
+            3,
+        )
+        if not accepted:
+            return
+
+        if thickness <= 0:
+            self.document.layer_thicknesses.pop(layer_name, None)
+        else:
+            self.document.layer_thicknesses[layer_name] = thickness
+
+        self._rebuild_stack_preview()
+        self.layer_panel.load_document(self.document)
+        if thickness <= 0:
+            self.status_label.setText(f"Cleared thickness for layer {layer_name}")
+        else:
+            self.status_label.setText(f"Layer thickness set: {layer_name} -> {thickness:.3f} mm")
 
     def _export_coordinates(self) -> None:
         if self.document is None or self.document.assembly is None:

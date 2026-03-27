@@ -10,6 +10,7 @@ from PySide6.QtCore import QEvent, QLineF, QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QFrame, QGraphicsItem, QGraphicsScene, QGraphicsView
 
+from core.layer_colors import build_layer_color_map, tint_color
 from core.layer_stack import build_layer_order_map
 from core.preview_entities import build_preview_entities
 from core.raw_dxf_types import RawEntity
@@ -21,6 +22,7 @@ ENTITY_INDEX_ROLE = 0
 ENTITY_CLOSED_ROLE = 1
 LAYER_NAME_ROLE = 2
 SOURCE_COUNT_ROLE = 3
+SOURCE_INDICES_ROLE = 4
 
 
 class DXFPreviewView(QGraphicsView):
@@ -33,6 +35,8 @@ class DXFPreviewView(QGraphicsView):
         self._scene_rect = QRectF(-400.0, -300.0, 800.0, 600.0)
         self._has_content = False
         self._item_styles: dict[QGraphicsItem, dict[str, Any]] = {}
+        self._selection_override: int | None = None
+        self._layer_colors: dict[str, str] = {}
 
         self.file_drop_handler: Callable[[Path], None] | None = None
         self.selection_changed_handler: Callable[[int | None], None] | None = None
@@ -58,26 +62,47 @@ class DXFPreviewView(QGraphicsView):
         self._has_content = False
 
         if document is None or not document.raw_entities:
+            self.placeholder.set_content("2D Preview", "Import DXF")
             self._scene.setSceneRect(self._scene_rect)
             self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
             self.placeholder.show()
             self._position_placeholder()
             return
 
+        visible_layers = set(document.visible_layers)
+        rendered_count = 0
         layer_order = build_layer_order_map(document.layer_info, document.raw_entities)
+        self._layer_colors = dict(document.layer_colors) or build_layer_color_map(
+            document.layer_info,
+            document.raw_entities,
+        )
         for preview_entity in build_preview_entities(document.raw_entities, document.layer_info):
+            layer_name = str(preview_entity.entity.get("layer", "0"))
+            if layer_name not in visible_layers:
+                continue
             item = self._draw_entity(
                 preview_entity.entity,
                 preview_entity.entity_index,
                 source_count=len(preview_entity.source_indices),
+                source_indices=preview_entity.source_indices,
             )
             if item is not None:
-                item.setZValue(float(layer_order.get(str(preview_entity.entity.get("layer", "0")), 0)))
+                item.setZValue(float(layer_order.get(layer_name, 0)))
+                rendered_count += 1
 
         self._scene_rect = QRectF(*document.scene_rect)
         self._scene.setSceneRect(self._scene_rect)
-        self._has_content = True
         self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._has_content = rendered_count > 0
+        if rendered_count <= 0:
+            self.placeholder.set_content("2D Preview", "All layers hidden")
+            self.placeholder.show()
+            self._position_placeholder()
+            return
+
+        self._apply_layer_focus(document.selected_layer_name)
+        if document.selected_entity_index is not None:
+            self.focus_entity(document.selected_entity_index, center=False)
         self.placeholder.hide()
 
     def resizeEvent(self, event) -> None:  # pragma: no cover
@@ -219,6 +244,7 @@ class DXFPreviewView(QGraphicsView):
         *,
         is_closed: bool,
         source_count: int,
+        source_indices: tuple[int, ...],
     ) -> QGraphicsItem:
         item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
@@ -226,6 +252,7 @@ class DXFPreviewView(QGraphicsView):
         item.setData(ENTITY_CLOSED_ROLE, is_closed)
         item.setData(LAYER_NAME_ROLE, layer_name)
         item.setData(SOURCE_COUNT_ROLE, source_count)
+        item.setData(SOURCE_INDICES_ROLE, source_indices)
         item.setPen(style["pen"])
         if hasattr(item, "setBrush"):
             item.setBrush(style["brush"])
@@ -242,26 +269,63 @@ class DXFPreviewView(QGraphicsView):
             if hasattr(item, "setBrush"):
                 item.setBrush(style["selected_brush"] if is_selected else style["brush"])
             if is_selected and selected_index is None:
-                entity_index = item.data(ENTITY_INDEX_ROLE)
-                if isinstance(entity_index, int):
-                    selected_index = entity_index
+                source_indices = item.data(SOURCE_INDICES_ROLE)
+                if (
+                    isinstance(self._selection_override, int)
+                    and isinstance(source_indices, tuple)
+                    and self._selection_override in source_indices
+                ):
+                    selected_index = self._selection_override
+                else:
+                    entity_index = item.data(ENTITY_INDEX_ROLE)
+                    if isinstance(entity_index, int):
+                        selected_index = entity_index
+
+        self._selection_override = None
 
         if self.selection_changed_handler is not None:
             self.selection_changed_handler(selected_index)
 
-    def _draw_entity(self, entity: RawEntity, entity_index: int, *, source_count: int = 1) -> QGraphicsItem | None:
+    def _apply_layer_focus(self, layer_name: str | None) -> None:
+        if not layer_name:
+            for item in self._item_styles:
+                item.setOpacity(1.0)
+            return
+
+        for item in self._item_styles:
+            item_layer = item.data(LAYER_NAME_ROLE)
+            item.setOpacity(1.0 if item_layer == layer_name else 0.22)
+
+    def focus_entity(self, entity_index: int | None, *, center: bool = True) -> None:
+        self._selection_override = entity_index
+        self._scene.clearSelection()
+
+        if entity_index is None:
+            return
+
+        for item in self._item_styles:
+            source_indices = item.data(SOURCE_INDICES_ROLE)
+            if isinstance(source_indices, tuple) and entity_index in source_indices:
+                item.setSelected(True)
+                item.setFocus()
+                if center:
+                    self.centerOn(item)
+                return
+
+    def _draw_entity(
+        self,
+        entity: RawEntity,
+        entity_index: int,
+        *,
+        source_count: int = 1,
+        source_indices: tuple[int, ...] = (),
+    ) -> QGraphicsItem | None:
         layer_name = str(entity.get("layer", "0"))
-        colors = {
-            "LINE": "#E8E8E8",
-            "CIRCLE": "#FF8A65",
-            "ARC": "#EF5350",
-            "LWPOLYLINE": "#4DD0E1",
-            "POINT": "#FFF176",
-        }
+        layer_color = self._layer_colors.get(layer_name, "#E8E8E8")
 
         entity_type = entity["type"]
         if entity_type == "LINE":
-            style = self._make_style(colors["LINE"], width=1.0 if source_count <= 1 else 2.4)
+            style = self._make_style(layer_color, width=1.0 if source_count <= 1 else 2.6)
             x1, y1 = entity["start"]
             x2, y2 = entity["end"]
             item = self._scene.addLine(x1, -y1, x2, -y2, style["pen"])
@@ -272,10 +336,11 @@ class DXFPreviewView(QGraphicsView):
                 style,
                 is_closed=False,
                 source_count=source_count,
+                source_indices=source_indices or (entity_index,),
             )
 
         if entity_type == "CIRCLE":
-            style = self._make_style(colors["CIRCLE"], width=1.6, fill_color="#FF7043")
+            style = self._make_style(layer_color, width=1.7, fill_color=tint_color(layer_color, ratio=0.18))
             center_x, center_y = entity["center"]
             radius = entity["radius"]
             item = self._scene.addEllipse(
@@ -293,13 +358,14 @@ class DXFPreviewView(QGraphicsView):
                 style,
                 is_closed=True,
                 source_count=source_count,
+                source_indices=source_indices or (entity_index,),
             )
 
         if entity_type == "ARC":
             points = entity.get("points") or []
             if len(points) < 2:
                 return None
-            style = self._make_style(colors["ARC"], width=1.2)
+            style = self._make_style(layer_color, width=1.3)
             path = QPainterPath(QPointF(points[0][0], -points[0][1]))
             for x_value, y_value in points[1:]:
                 path.lineTo(x_value, -y_value)
@@ -311,6 +377,7 @@ class DXFPreviewView(QGraphicsView):
                 style,
                 is_closed=False,
                 source_count=source_count,
+                source_indices=source_indices or (entity_index,),
             )
 
         if entity_type == "LWPOLYLINE":
@@ -319,9 +386,9 @@ class DXFPreviewView(QGraphicsView):
                 return None
             is_closed = bool(entity.get("closed"))
             style = self._make_style(
-                colors["LWPOLYLINE"],
+                layer_color,
                 width=2.1 if is_closed else 1.8,
-                fill_color="#3D7EA6" if is_closed else None,
+                fill_color=tint_color(layer_color, ratio=0.16) if is_closed else None,
             )
             path = QPainterPath(QPointF(points[0][0], -points[0][1]))
             for x_value, y_value in points[1:]:
@@ -336,10 +403,11 @@ class DXFPreviewView(QGraphicsView):
                 style,
                 is_closed=is_closed,
                 source_count=source_count,
+                source_indices=source_indices or (entity_index,),
             )
 
         if entity_type == "POINT":
-            style = self._make_style(colors["POINT"], width=1.0, fill_color="#FFF176")
+            style = self._make_style(layer_color, width=1.1, fill_color=tint_color(layer_color, ratio=0.2))
             x_value, y_value = entity["location"]
             item = self._scene.addEllipse(
                 x_value - 1.8,
@@ -356,6 +424,7 @@ class DXFPreviewView(QGraphicsView):
                 style,
                 is_closed=False,
                 source_count=source_count,
+                source_indices=source_indices or (entity_index,),
             )
 
         return None

@@ -83,6 +83,31 @@ def test_load_raw_dxf_entities_can_filter_enabled_layers(tmp_path):
     assert mech_layer["enabled"] is False
 
 
+def test_load_raw_dxf_entities_suggests_semantic_roles(tmp_path):
+    doc = ezdxf.new()
+    doc.layers.add("01_substrate", color=7)
+    doc.layers.add("06_wire", color=1)
+
+    msp = doc.modelspace()
+    msp.add_lwpolyline(
+        [(0, 0), (10, 0), (10, 6), (0, 6)],
+        close=True,
+        dxfattribs={"layer": "01_substrate"},
+    )
+    msp.add_line((1, 1), (9, 5), dxfattribs={"layer": "06_wire"})
+
+    dxf_path = tmp_path / "semantic_layers.dxf"
+    doc.saveas(dxf_path)
+
+    _, _, _, layer_info = load_raw_dxf_entities(dxf_path)
+
+    substrate_layer = next(layer for layer in layer_info if layer["name"] == "01_substrate")
+    wire_layer = next(layer for layer in layer_info if layer["name"] == "06_wire")
+
+    assert substrate_layer["suggested_role"] == "substrate"
+    assert wire_layer["suggested_role"] == "wire"
+
+
 def test_extract_coordinates_from_raw_entities_deduplicates_points():
     raw_entities = [
         {"type": "LINE", "start": (0.0, 0.0), "end": (1.0, 0.0)},

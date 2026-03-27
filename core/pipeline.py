@@ -19,6 +19,7 @@ from .raw_dxf import (
     load_raw_dxf_entities,
     load_raw_dxf_entities_from_document,
 )
+from .semantic import classify_semantic_layers
 from .validation.drc import DRCChecker, DRCMode
 from .validation.helpers import build_violation_report
 
@@ -68,12 +69,14 @@ def load_import_preview(
         parser.enabled_layers,
     )
     parser_elements = parser.parse_document(document)
+    semantic_result = classify_semantic_layers(raw_entities, layer_info)
     return {
         "raw_entities": raw_entities,
         "scene_rect": scene_rect,
         "raw_counts": raw_counts,
         "layer_info": layer_info,
         "parser_elements": parser_elements,
+        "semantic_result": semantic_result,
     }
 
 
@@ -113,6 +116,7 @@ def finalize_prepared_document(
     raw_counts = preview["raw_counts"]
     layer_info = preview["layer_info"]
     parser_elements = preview["parser_elements"]
+    semantic_result = preview["semantic_result"]
     exporter = CoordinateExporter()
 
     coordinates = exporter.extract_bond_points(assembly)
@@ -140,6 +144,7 @@ def finalize_prepared_document(
         "raw_counts": raw_counts,
         "layer_info": layer_info,
         "parser_elements": parser_elements,
+        "semantic_result": semantic_result,
         "elements": elements,
         "converted_counts": Counter(element.element_type for element in elements),
         "coordinates": coordinates,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from .layer_semantics import suggest_layer_semantic_role
 from .layer_stack import layer_sort_key
 from .dxf_sampling import expand_lwpolyline_points, sample_arc_points
 from .raw_dxf_types import LayerInfo, Point2D, RawEntity, SceneRect
@@ -135,6 +136,7 @@ def build_layer_info(
                 "is_visible": not layer.is_off() and not layer.is_frozen(),
                 "plot": bool(getattr(layer.dxf, "plot", 1)),
                 "mapped_type": normalized_mapping.get(layer_name.upper()),
+                "suggested_role": suggest_layer_semantic_role(layer_name),
                 "enabled": True if enabled_layers is None else layer_name in enabled_layers,
                 "entity_count": int(layer_entity_counts.get(layer_name, 0)),
                 "entity_types": dict(sorted(layer_type_counts.get(layer_name, Counter()).items())),
@@ -153,6 +155,7 @@ def build_layer_info(
                 "is_visible": True,
                 "plot": True,
                 "mapped_type": normalized_mapping.get(layer_name.upper()),
+                "suggested_role": suggest_layer_semantic_role(layer_name),
                 "enabled": True if enabled_layers is None else layer_name in enabled_layers,
                 "entity_count": int(layer_entity_counts.get(layer_name, 0)),
                 "entity_types": dict(sorted(layer_type_counts.get(layer_name, Counter()).items())),

@@ -89,3 +89,63 @@ def test_build_stacked_preview_assembly_stacks_layers_in_numeric_order():
     compound = assembly.toCompound()
     bbox = compound.BoundingBox()
     assert bbox.zlen >= 1.0
+
+
+def test_build_stacked_preview_assembly_uses_layer_thicknesses_and_visibility():
+    raw_entities = [
+        {
+            "type": "LWPOLYLINE",
+            "points": [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (0.0, 2.0)],
+            "closed": True,
+            "layer": "01_substrate",
+        },
+        {
+            "type": "LWPOLYLINE",
+            "points": [(1.0, 3.0), (3.0, 3.0), (3.0, 4.0), (1.0, 4.0)],
+            "closed": True,
+            "layer": "04_pad",
+        },
+    ]
+    layer_info = [
+        {
+            "name": "01_substrate",
+            "color": 7,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": "substrate",
+            "entity_count": 1,
+            "entity_types": {"LWPOLYLINE": 1},
+        },
+        {
+            "name": "04_pad",
+            "color": 1,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": "pad",
+            "entity_count": 1,
+            "entity_types": {"LWPOLYLINE": 1},
+        },
+    ]
+
+    assembly = build_stacked_preview_assembly(
+        raw_entities,
+        layer_info,
+        {},
+        layer_thicknesses={"01_substrate": 0.8, "04_pad": 0.2},
+        visible_layers={"01_substrate"},
+    )
+
+    assert assembly is not None
+    bbox = assembly.toCompound().BoundingBox()
+    assert bbox.zlen >= 0.8
+    assert bbox.zlen < 1.1
