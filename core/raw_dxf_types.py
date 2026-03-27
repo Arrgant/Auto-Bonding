@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 
 Point2D = tuple[float, float]
@@ -59,6 +59,7 @@ class LayerInfo(TypedDict):
     is_visible: bool
     plot: bool
     mapped_type: str | None
+    enabled: NotRequired[bool]
     entity_count: int
     entity_types: dict[str, int]
 

@@ -21,6 +21,16 @@ class DRCReport(TypedDict):
     info: NotRequired[int]
 
 
+class RawImportPreview(TypedDict):
+    """Typed payload returned by the raw preview stage."""
+
+    raw_entities: list[RawEntity]
+    scene_rect: SceneRect
+    raw_counts: Counter[str]
+    layer_info: list[LayerInfo]
+    parser_elements: list[BondingElement]
+
+
 class PreparedDocument(TypedDict):
     """Typed payload returned by ``prepare_document()``."""
 
@@ -38,4 +48,4 @@ class PreparedDocument(TypedDict):
     note: str
 
 
-__all__ = ["DRCReport", "PreparedDocument"]
+__all__ = ["DRCReport", "PreparedDocument", "RawImportPreview"]

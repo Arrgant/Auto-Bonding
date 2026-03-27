@@ -50,3 +50,17 @@ def test_parse_point_preserves_xyz(tmp_path):
 
     assert len(elements) == 1
     assert elements[0].geometry == {"x": 1.5, "y": 2.5, "z": 3.5}
+
+
+def test_parse_document_respects_enabled_layers_and_manual_mapping():
+    document = ezdxf.new("R2010")
+    modelspace = document.modelspace()
+    modelspace.add_circle((2, 2), 0.5, dxfattribs={"layer": "1_CUSTOM"})
+    modelspace.add_line((0, 0), (5, 0), dxfattribs={"layer": "2_SKIP"})
+
+    parser = DXFParser(layer_mapping={"1_CUSTOM": "die_pad"}, enabled_layers={"1_CUSTOM"})
+    elements = parser.parse_document(document)
+
+    assert len(elements) == 1
+    assert elements[0].element_type == "die_pad"
+    assert elements[0].layer == "1_CUSTOM"

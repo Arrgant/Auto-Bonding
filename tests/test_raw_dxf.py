@@ -56,6 +56,33 @@ def test_load_raw_dxf_entities_expands_bulge_polyline(tmp_path):
     assert len(entities[0]["points"]) > 2
 
 
+def test_load_raw_dxf_entities_can_filter_enabled_layers(tmp_path):
+    doc = ezdxf.new()
+    doc.layers.add("1_SIGNAL", color=1)
+    doc.layers.add("2_MECH", color=3)
+
+    msp = doc.modelspace()
+    msp.add_line((0, 0), (10, 0), dxfattribs={"layer": "1_SIGNAL"})
+    msp.add_circle((5, 5), 2, dxfattribs={"layer": "2_MECH"})
+
+    dxf_path = tmp_path / "filtered_layers.dxf"
+    doc.saveas(dxf_path)
+
+    entities, _, counts, layer_info = load_raw_dxf_entities(
+        dxf_path,
+        {"1_SIGNAL": "wire"},
+        enabled_layers={"1_SIGNAL"},
+    )
+
+    assert len(entities) == 1
+    assert counts["LINE"] == 1
+    assert counts["CIRCLE"] == 0
+    signal_layer = next(layer for layer in layer_info if layer["name"] == "1_SIGNAL")
+    mech_layer = next(layer for layer in layer_info if layer["name"] == "2_MECH")
+    assert signal_layer["enabled"] is True
+    assert mech_layer["enabled"] is False
+
+
 def test_extract_coordinates_from_raw_entities_deduplicates_points():
     raw_entities = [
         {"type": "LINE", "start": (0.0, 0.0), "end": (1.0, 0.0)},

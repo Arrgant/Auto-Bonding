@@ -8,10 +8,12 @@ from .pipeline import (
     build_drc_report,
     extract_coordinates_from_raw_entities,
     infer_elements_from_raw_entities,
+    load_import_preview,
     load_raw_dxf_entities,
     prepare_document,
+    prepare_document_from_preview,
 )
-from .pipeline_types import DRCReport, PreparedDocument
+from .pipeline_types import DRCReport, PreparedDocument, RawImportPreview
 from .validation.drc import DRCChecker, DRCMode, DRCViolation
 from .validation.igbt_rules import (
     IGBTPadType,
@@ -38,12 +40,15 @@ __all__ = [
     "IGBT_RULES_DEFAULT",
     "IGBT_RULES_HIGH_VOLTAGE",
     "PreparedDocument",
+    "RawImportPreview",
     "WireLoop",
     "WireType",
     "build_conversion_artifacts",
     "build_drc_report",
     "extract_coordinates_from_raw_entities",
     "infer_elements_from_raw_entities",
+    "load_import_preview",
     "load_raw_dxf_entities",
     "prepare_document",
+    "prepare_document_from_preview",
 ]

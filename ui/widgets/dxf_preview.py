@@ -7,17 +7,24 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QEvent, QLineF, QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QFrame, QGraphicsScene, QGraphicsView
+from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QFrame, QGraphicsItem, QGraphicsScene, QGraphicsView
 
+from core.layer_stack import build_layer_order_map
+from core.preview_entities import build_preview_entities
 from core.raw_dxf_types import RawEntity
 from services import ProjectDocument
 
 from .viewer_placeholder import ViewerPlaceholder
 
+ENTITY_INDEX_ROLE = 0
+ENTITY_CLOSED_ROLE = 1
+LAYER_NAME_ROLE = 2
+SOURCE_COUNT_ROLE = 3
+
 
 class DXFPreviewView(QGraphicsView):
-    """2D DXF preview area."""
+    """2D DXF preview area with layer ordering and entity selection."""
 
     def __init__(self):
         super().__init__()
@@ -25,7 +32,11 @@ class DXFPreviewView(QGraphicsView):
         self.setScene(self._scene)
         self._scene_rect = QRectF(-400.0, -300.0, 800.0, 600.0)
         self._has_content = False
+        self._item_styles: dict[QGraphicsItem, dict[str, Any]] = {}
+
         self.file_drop_handler: Callable[[Path], None] | None = None
+        self.selection_changed_handler: Callable[[int | None], None] | None = None
+        self.closed_shape_click_handler: Callable[[int], None] | None = None
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -39,9 +50,11 @@ class DXFPreviewView(QGraphicsView):
         self.placeholder.hide()
         self.viewport().installEventFilter(self)
         self.placeholder.installEventFilter(self)
+        self._scene.selectionChanged.connect(self._handle_selection_changed)
 
     def load_document(self, document: ProjectDocument | None) -> None:
         self._scene.clear()
+        self._item_styles.clear()
         self._has_content = False
 
         if document is None or not document.raw_entities:
@@ -51,8 +64,15 @@ class DXFPreviewView(QGraphicsView):
             self._position_placeholder()
             return
 
-        for entity in document.raw_entities:
-            self._draw_entity(entity)
+        layer_order = build_layer_order_map(document.layer_info, document.raw_entities)
+        for preview_entity in build_preview_entities(document.raw_entities, document.layer_info):
+            item = self._draw_entity(
+                preview_entity.entity,
+                preview_entity.entity_index,
+                source_count=len(preview_entity.source_indices),
+            )
+            if item is not None:
+                item.setZValue(float(layer_order.get(str(preview_entity.entity.get("layer", "0")), 0)))
 
         self._scene_rect = QRectF(*document.scene_rect)
         self._scene.setSceneRect(self._scene_rect)
@@ -65,6 +85,21 @@ class DXFPreviewView(QGraphicsView):
         if self._has_content:
             self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
         self._position_placeholder()
+
+    def mousePressEvent(self, event) -> None:  # pragma: no cover
+        super().mousePressEvent(event)
+
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+
+        item = self.itemAt(event.position().toPoint())
+        if item is None:
+            return
+
+        if bool(item.data(ENTITY_CLOSED_ROLE)) and self.closed_shape_click_handler is not None:
+            entity_index = item.data(ENTITY_INDEX_ROLE)
+            if isinstance(entity_index, int):
+                self.closed_shape_click_handler(entity_index)
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:  # pragma: no cover
         painter.fillRect(rect, QColor("#161616"))
@@ -142,46 +177,185 @@ class DXFPreviewView(QGraphicsView):
                 paths.append(file_path)
         return paths
 
-    def _draw_entity(self, entity: RawEntity) -> None:
+    def _make_style(
+        self,
+        stroke_color: str,
+        *,
+        width: float,
+        fill_color: str | None = None,
+    ) -> dict[str, Any]:
+        pen = QPen(QColor(stroke_color))
+        pen.setWidthF(width)
+        pen.setCosmetic(True)
+
+        selected_pen = QPen(QColor("#FFD166"))
+        selected_pen.setWidthF(width + 1.25)
+        selected_pen.setCosmetic(True)
+
+        brush = QBrush(Qt.BrushStyle.NoBrush)
+        selected_brush = QBrush(Qt.BrushStyle.NoBrush)
+        if fill_color is not None:
+            fill = QColor(fill_color)
+            fill.setAlpha(72)
+            brush = QBrush(fill)
+
+            selected_fill = QColor("#FFB703")
+            selected_fill.setAlpha(110)
+            selected_brush = QBrush(selected_fill)
+
+        return {
+            "pen": pen,
+            "selected_pen": selected_pen,
+            "brush": brush,
+            "selected_brush": selected_brush,
+        }
+
+    def _register_item(
+        self,
+        item: QGraphicsItem,
+        entity_index: int,
+        layer_name: str,
+        style: dict[str, Any],
+        *,
+        is_closed: bool,
+        source_count: int,
+    ) -> QGraphicsItem:
+        item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
+        item.setData(ENTITY_INDEX_ROLE, entity_index)
+        item.setData(ENTITY_CLOSED_ROLE, is_closed)
+        item.setData(LAYER_NAME_ROLE, layer_name)
+        item.setData(SOURCE_COUNT_ROLE, source_count)
+        item.setPen(style["pen"])
+        if hasattr(item, "setBrush"):
+            item.setBrush(style["brush"])
+        self._item_styles[item] = style
+        return item
+
+    def _handle_selection_changed(self) -> None:
+        selected_index: int | None = None
+        selected_items = set(self._scene.selectedItems())
+
+        for item, style in self._item_styles.items():
+            is_selected = item in selected_items
+            item.setPen(style["selected_pen"] if is_selected else style["pen"])
+            if hasattr(item, "setBrush"):
+                item.setBrush(style["selected_brush"] if is_selected else style["brush"])
+            if is_selected and selected_index is None:
+                entity_index = item.data(ENTITY_INDEX_ROLE)
+                if isinstance(entity_index, int):
+                    selected_index = entity_index
+
+        if self.selection_changed_handler is not None:
+            self.selection_changed_handler(selected_index)
+
+    def _draw_entity(self, entity: RawEntity, entity_index: int, *, source_count: int = 1) -> QGraphicsItem | None:
+        layer_name = str(entity.get("layer", "0"))
         colors = {
-            "LINE": "#E53935",
-            "CIRCLE": "#FF7043",
+            "LINE": "#E8E8E8",
+            "CIRCLE": "#FF8A65",
             "ARC": "#EF5350",
-            "LWPOLYLINE": "#FF8A65",
+            "LWPOLYLINE": "#4DD0E1",
             "POINT": "#FFF176",
         }
 
-        pen = QPen(QColor(colors.get(entity["type"], "#E8E8E8")))
-        pen.setWidthF(0.0)
-        pen.setCosmetic(True)
-
         entity_type = entity["type"]
         if entity_type == "LINE":
+            style = self._make_style(colors["LINE"], width=1.0 if source_count <= 1 else 2.4)
             x1, y1 = entity["start"]
             x2, y2 = entity["end"]
-            self._scene.addLine(x1, -y1, x2, -y2, pen)
-        elif entity_type == "CIRCLE":
+            item = self._scene.addLine(x1, -y1, x2, -y2, style["pen"])
+            return self._register_item(
+                item,
+                entity_index,
+                layer_name,
+                style,
+                is_closed=False,
+                source_count=source_count,
+            )
+
+        if entity_type == "CIRCLE":
+            style = self._make_style(colors["CIRCLE"], width=1.6, fill_color="#FF7043")
             center_x, center_y = entity["center"]
             radius = entity["radius"]
-            self._scene.addEllipse(center_x - radius, -(center_y + radius), radius * 2.0, radius * 2.0, pen)
-        elif entity_type == "ARC":
+            item = self._scene.addEllipse(
+                center_x - radius,
+                -(center_y + radius),
+                radius * 2.0,
+                radius * 2.0,
+                style["pen"],
+                style["brush"],
+            )
+            return self._register_item(
+                item,
+                entity_index,
+                layer_name,
+                style,
+                is_closed=True,
+                source_count=source_count,
+            )
+
+        if entity_type == "ARC":
             points = entity.get("points") or []
             if len(points) < 2:
-                return
+                return None
+            style = self._make_style(colors["ARC"], width=1.2)
             path = QPainterPath(QPointF(points[0][0], -points[0][1]))
             for x_value, y_value in points[1:]:
                 path.lineTo(x_value, -y_value)
-            self._scene.addPath(path, pen)
-        elif entity_type == "LWPOLYLINE":
+            item = self._scene.addPath(path, style["pen"])
+            return self._register_item(
+                item,
+                entity_index,
+                layer_name,
+                style,
+                is_closed=False,
+                source_count=source_count,
+            )
+
+        if entity_type == "LWPOLYLINE":
             points = entity.get("points") or []
             if len(points) < 2:
-                return
+                return None
+            is_closed = bool(entity.get("closed"))
+            style = self._make_style(
+                colors["LWPOLYLINE"],
+                width=2.1 if is_closed else 1.8,
+                fill_color="#3D7EA6" if is_closed else None,
+            )
             path = QPainterPath(QPointF(points[0][0], -points[0][1]))
             for x_value, y_value in points[1:]:
                 path.lineTo(x_value, -y_value)
-            if entity.get("closed"):
+            if is_closed:
                 path.closeSubpath()
-            self._scene.addPath(path, pen)
-        elif entity_type == "POINT":
+            item = self._scene.addPath(path, style["pen"], style["brush"])
+            return self._register_item(
+                item,
+                entity_index,
+                layer_name,
+                style,
+                is_closed=is_closed,
+                source_count=source_count,
+            )
+
+        if entity_type == "POINT":
+            style = self._make_style(colors["POINT"], width=1.0, fill_color="#FFF176")
             x_value, y_value = entity["location"]
-            self._scene.addEllipse(x_value - 1.5, -(y_value + 1.5), 3.0, 3.0, pen)
+            item = self._scene.addEllipse(
+                x_value - 1.8,
+                -(y_value + 1.8),
+                3.6,
+                3.6,
+                style["pen"],
+                style["brush"],
+            )
+            return self._register_item(
+                item,
+                entity_index,
+                layer_name,
+                style,
+                is_closed=False,
+                source_count=source_count,
+            )
+
+        return None

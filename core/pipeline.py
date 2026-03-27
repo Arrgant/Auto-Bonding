@@ -6,12 +6,19 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+import ezdxf
+
 from .export.coordinates import CoordinateExporter
 from .fallback import infer_elements_from_raw_entities
 from .geometry.converter import BondingDiagramConverter, BondingElement
+from .layer_stack import layer_sort_key
 from .parsing.dxf import DXFParser
-from .pipeline_types import DRCReport, PreparedDocument
-from .raw_dxf import extract_coordinates_from_raw_entities, load_raw_dxf_entities
+from .pipeline_types import DRCReport, PreparedDocument, RawImportPreview
+from .raw_dxf import (
+    extract_coordinates_from_raw_entities,
+    load_raw_dxf_entities,
+    load_raw_dxf_entities_from_document,
+)
 from .validation.drc import DRCChecker, DRCMode
 from .validation.helpers import build_violation_report
 
@@ -47,21 +54,66 @@ def build_drc_report(checker: DRCChecker, assembly: Any, elements: list[BondingE
     return build_violation_report(violations, include_info=True)
 
 
-def prepare_document(file_path: Path, config: dict[str, Any]) -> PreparedDocument:
-    parser = DXFParser()
-    raw_entities, scene_rect, raw_counts, layer_info = load_raw_dxf_entities(file_path, parser.layer_mapping)
-    parser_elements = parser.parse_file(str(file_path))
-    converter = BondingDiagramConverter(config)
-    exporter = CoordinateExporter()
+def load_import_preview(
+    file_path: Path,
+    *,
+    enabled_layers: set[str] | None = None,
+    layer_mapping: dict[str, str] | None = None,
+) -> RawImportPreview:
+    parser = DXFParser(layer_mapping=layer_mapping, enabled_layers=enabled_layers)
+    document = ezdxf.readfile(str(file_path))
+    raw_entities, scene_rect, raw_counts, layer_info = load_raw_dxf_entities_from_document(
+        document,
+        parser.layer_mapping,
+        parser.enabled_layers,
+    )
+    parser_elements = parser.parse_document(document)
+    return {
+        "raw_entities": raw_entities,
+        "scene_rect": scene_rect,
+        "raw_counts": raw_counts,
+        "layer_info": layer_info,
+        "parser_elements": parser_elements,
+    }
 
-    used_fallback = False
+
+def resolve_preview_elements(preview: RawImportPreview, config: dict[str, Any]) -> tuple[list[BondingElement], bool]:
+    """Resolve parsed elements first, then fall back to geometric inference."""
+
+    parser_elements = preview["parser_elements"]
     if parser_elements:
-        elements = parser_elements
-    else:
-        elements = infer_elements_from_raw_entities(raw_entities, config)
-        used_fallback = True
+        return parser_elements, False
 
-    assembly = converter.convert_elements(elements)
+    return infer_elements_from_raw_entities(preview["raw_entities"], config), True
+
+
+def group_elements_by_layer(elements: list[BondingElement]) -> list[tuple[str, list[BondingElement]]]:
+    """Return bonding elements grouped by layer using numeric-first ordering."""
+
+    grouped: dict[str, list[BondingElement]] = {}
+    for element in elements:
+        layer_name = str(element.layer or "0")
+        grouped.setdefault(layer_name, []).append(element)
+
+    return [(layer_name, grouped[layer_name]) for layer_name in sorted(grouped, key=layer_sort_key)]
+
+
+def finalize_prepared_document(
+    preview: RawImportPreview,
+    config: dict[str, Any],
+    *,
+    elements: list[BondingElement],
+    assembly: Any,
+    used_fallback: bool,
+) -> PreparedDocument:
+    """Finalize exportable artifacts after element resolution and 3D conversion."""
+
+    raw_entities = preview["raw_entities"]
+    scene_rect = preview["scene_rect"]
+    raw_counts = preview["raw_counts"]
+    layer_info = preview["layer_info"]
+    parser_elements = preview["parser_elements"]
+    exporter = CoordinateExporter()
 
     coordinates = exporter.extract_bond_points(assembly)
     if len(coordinates) <= 2:
@@ -96,3 +148,25 @@ def prepare_document(file_path: Path, config: dict[str, Any]) -> PreparedDocumen
         "used_fallback": used_fallback,
         "note": note,
     }
+
+
+def prepare_document_from_preview(preview: RawImportPreview, config: dict[str, Any]) -> PreparedDocument:
+    elements, used_fallback = resolve_preview_elements(preview, config)
+    converter = BondingDiagramConverter(config)
+    assembly = converter.convert_elements(elements)
+    return finalize_prepared_document(
+        preview,
+        config,
+        elements=elements,
+        assembly=assembly,
+        used_fallback=used_fallback,
+    )
+
+
+def prepare_document(file_path: Path, config: dict[str, Any]) -> PreparedDocument:
+    preview = load_import_preview(
+        file_path,
+        enabled_layers=set(config.get("enabled_layers", [])) or None,
+        layer_mapping=dict(config.get("layer_mapping_overrides", {})) or None,
+    )
+    return prepare_document_from_preview(preview, config)

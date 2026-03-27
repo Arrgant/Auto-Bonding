@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from .layer_stack import layer_sort_key
 from .dxf_sampling import expand_lwpolyline_points, sample_arc_points
 from .raw_dxf_types import LayerInfo, Point2D, RawEntity, SceneRect
 
@@ -113,6 +114,7 @@ def build_layer_info(
     layer_entity_counts: Counter,
     layer_type_counts: dict[str, Counter],
     normalized_mapping: dict[str, str],
+    enabled_layers: set[str] | None = None,
 ) -> list[LayerInfo]:
     """Build sorted layer metadata for the import status UI."""
 
@@ -133,6 +135,7 @@ def build_layer_info(
                 "is_visible": not layer.is_off() and not layer.is_frozen(),
                 "plot": bool(getattr(layer.dxf, "plot", 1)),
                 "mapped_type": normalized_mapping.get(layer_name.upper()),
+                "enabled": True if enabled_layers is None else layer_name in enabled_layers,
                 "entity_count": int(layer_entity_counts.get(layer_name, 0)),
                 "entity_types": dict(sorted(layer_type_counts.get(layer_name, Counter()).items())),
             }
@@ -150,12 +153,13 @@ def build_layer_info(
                 "is_visible": True,
                 "plot": True,
                 "mapped_type": normalized_mapping.get(layer_name.upper()),
+                "enabled": True if enabled_layers is None else layer_name in enabled_layers,
                 "entity_count": int(layer_entity_counts.get(layer_name, 0)),
                 "entity_types": dict(sorted(layer_type_counts.get(layer_name, Counter()).items())),
             }
         )
 
-    layer_info.sort(key=lambda item: (-item["entity_count"], item["name"].lower()))
+    layer_info.sort(key=lambda item: layer_sort_key(str(item["name"])))
     return layer_info
 
 

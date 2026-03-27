@@ -110,6 +110,32 @@ class TestBondingDiagramConverter:
         assert any(name.startswith("wire_") for name in object_names)
         assert any(name.startswith("die_pad_") for name in object_names)
 
+    def test_append_elements_reuses_existing_assembly(self):
+        converter = BondingDiagramConverter()
+        assembly = cq.Assembly()
+        elements = [
+            BondingElement(
+                element_type="die_pad",
+                layer="2_TOP",
+                geometry={"x": 0, "y": 0, "z": 0, "width": 1.0, "height": 1.0},
+                properties={"thickness": 0.1},
+            ),
+            BondingElement(
+                element_type="wire",
+                layer="3_WIRE",
+                geometry={"p1": [0, 0, 0], "p2": [5, 0, 0]},
+                properties={"loop_height": 0.5, "wire_diameter": 0.025, "material": "gold"},
+            ),
+        ]
+
+        returned = converter.append_elements(assembly, elements[:1])
+        converter.append_elements(assembly, elements[1:])
+
+        assert returned is assembly
+        object_names = set(assembly.objects.keys())
+        assert any(name.startswith("die_pad_") for name in object_names)
+        assert any(name.startswith("wire_") for name in object_names)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

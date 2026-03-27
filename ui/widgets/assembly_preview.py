@@ -2,24 +2,26 @@
 
 from __future__ import annotations
 
-import math
-import struct
+from functools import partial
 from typing import Any
 
 from PySide6.Qt3DCore import Qt3DCore
 from PySide6.Qt3DExtras import Qt3DExtras
 from PySide6.Qt3DRender import Qt3DRender
-from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtCore import QByteArray, QThread, QTimer, Qt
 from PySide6.QtGui import QColor, QVector3D
 from PySide6.QtWidgets import QFrame, QLabel, QStackedLayout, QVBoxLayout, QWidget
 
 from services import ProjectDocument
 
+from .mesh_worker import PreviewMeshWorker
 from .viewer_placeholder import ViewerPlaceholder
 
 
 class AssemblyPreviewWidget(QWidget):
     """Hardware-accelerated 3D preview built with Qt3D."""
+
+    FINE_MESH_DELAY_MS = 450
 
     def __init__(self):
         super().__init__()
@@ -45,34 +47,137 @@ class AssemblyPreviewWidget(QWidget):
         self._stack.addWidget(self._container)
 
         self._current_root: Any | None = None
+        self._load_token = 0
+        self._mesh_threads: list[QThread] = []
+        self._mesh_workers: list[PreviewMeshWorker] = []
+        self._loaded_fine_tokens: set[int] = set()
+        self._pending_assembly: Any | None = None
+        self._allow_fine_mesh = True
+        self._progressive_mesh_bytes = QByteArray()
+        self._progressive_vertex_count = 0
+        self._progressive_diagonal = 1.0
+        self._fine_timer = QTimer(self)
+        self._fine_timer.setSingleShot(True)
+        self._fine_timer.timeout.connect(self._start_scheduled_fine_mesh)
         self._empty_scene()
 
-    def load_assembly(self, assembly: Any | None) -> None:
+    def load_assembly(self, assembly: Any | None, *, progressive: bool = False) -> None:
+        self._load_token += 1
+        self._loaded_fine_tokens.discard(self._load_token)
+        self._fine_timer.stop()
+        self._allow_fine_mesh = not progressive
+        self._reset_progressive_mesh()
+
         if assembly is None or not getattr(assembly, "objects", {}):
             self.placeholder.set_content("3D Preview", "Import DXF")
             self._empty_scene()
             return
 
-        try:
-            mesh_bytes, vertex_count, diagonal = self._build_mesh_payload(assembly)
-        except Exception:
-            mesh_bytes, vertex_count, diagonal = QByteArray(), 0, 1.0
+        self._pending_assembly = assembly
+        self.placeholder.set_content("3D Preview", "Building layer mesh" if progressive else "Generating mesh")
+        self._stack.setCurrentWidget(self._placeholder_page)
+        self._start_mesh_job(assembly, "coarse", self._load_token)
+
+    def _start_mesh_job(self, assembly: Any, quality: str, token: int) -> None:
+        thread = QThread(self)
+        worker = PreviewMeshWorker(assembly, quality, token)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.mesh_ready.connect(self._handle_mesh_ready)
+        worker.failed.connect(self._handle_mesh_failure)
+        worker.mesh_ready.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(partial(self._cleanup_mesh_job, thread, worker))
+
+        self._mesh_threads.append(thread)
+        self._mesh_workers.append(worker)
+        thread.start()
+
+    def _cleanup_mesh_job(self, thread: QThread, worker: PreviewMeshWorker) -> None:
+        if thread in self._mesh_threads:
+            self._mesh_threads.remove(thread)
+        if worker in self._mesh_workers:
+            self._mesh_workers.remove(worker)
+
+    def _handle_mesh_ready(
+        self,
+        token: int,
+        quality: str,
+        mesh_bytes: Any,
+        vertex_count: int,
+        diagonal: float,
+    ) -> None:
+        if token != self._load_token:
+            return
 
         if vertex_count <= 0:
-            self.placeholder.set_content("3D Preview", "Model unavailable")
-            self._empty_scene()
+            if quality == "coarse":
+                self.placeholder.set_content("3D Preview", "Model unavailable")
+                self._empty_scene()
             return
 
         self._current_root = self._build_scene(mesh_bytes, vertex_count, diagonal)
         self._window.setRootEntity(self._current_root)
         self._stack.setCurrentWidget(self._container)
 
+        if quality == "coarse" and self._allow_fine_mesh and token not in self._loaded_fine_tokens:
+            self._loaded_fine_tokens.add(token)
+            self._fine_timer.start(self.FINE_MESH_DELAY_MS)
+
+    def _handle_mesh_failure(self, token: int, quality: str, _message: str) -> None:
+        if token != self._load_token:
+            return
+        if quality == "coarse":
+            self.placeholder.set_content("3D Preview", "Model unavailable")
+            self._empty_scene()
+
+    def _start_scheduled_fine_mesh(self) -> None:
+        assembly = self._current_assembly()
+        if assembly is None or self._load_token not in self._loaded_fine_tokens:
+            return
+        self._start_mesh_job(assembly, "fine", self._load_token)
+
+    def _current_assembly(self) -> Any | None:
+        return self._pending_assembly
+
+    def append_progressive_mesh(self, mesh_bytes: QByteArray, vertex_count: int, diagonal: float) -> None:
+        """Append one coarse mesh chunk during staged import."""
+
+        if vertex_count <= 0:
+            return
+
+        self._fine_timer.stop()
+        self._pending_assembly = None
+        self._allow_fine_mesh = False
+        self._progressive_mesh_bytes.append(mesh_bytes)
+        self._progressive_vertex_count += vertex_count
+        self._progressive_diagonal = max(self._progressive_diagonal, float(diagonal), 1.0)
+        self._current_root = self._build_scene(
+            self._progressive_mesh_bytes,
+            self._progressive_vertex_count,
+            self._progressive_diagonal,
+        )
+        self._window.setRootEntity(self._current_root)
+        self._stack.setCurrentWidget(self._container)
+
+    def _reset_progressive_mesh(self) -> None:
+        self._progressive_mesh_bytes = QByteArray()
+        self._progressive_vertex_count = 0
+        self._progressive_diagonal = 1.0
+
     def _empty_scene(self) -> None:
+        self._fine_timer.stop()
+        self._pending_assembly = None
+        self._allow_fine_mesh = True
+        self._reset_progressive_mesh()
         self._current_root = Qt3DCore.QEntity()
         self._window.setRootEntity(self._current_root)
         self._stack.setCurrentWidget(self._placeholder_page)
 
-    def _build_scene(self, mesh_bytes: QByteArray, vertex_count: int, diagonal: float) -> Any:
+    def _build_scene(self, mesh_bytes: Any, vertex_count: int, diagonal: float) -> Any:
         root = Qt3DCore.QEntity()
 
         self._configure_camera(diagonal)
@@ -128,42 +233,7 @@ class AssemblyPreviewWidget(QWidget):
         super().resizeEvent(event)
         self._window.camera().setAspectRatio(max(self.width(), 1) / max(self.height(), 1))
 
-    def _build_mesh_payload(self, assembly: Any) -> tuple[QByteArray, int, float]:
-        compound = assembly.toCompound() if hasattr(assembly, "toCompound") else None
-        if compound is None:
-            return QByteArray(), 0, 1.0
-
-        bbox = compound.BoundingBox()
-        diagonal = max(float(bbox.xlen), float(bbox.ylen), float(bbox.zlen), 1.0)
-        tolerance = max(diagonal / 20.0, 0.75)
-        vertices, triangles = compound.tessellate(tolerance)
-        if not triangles:
-            return QByteArray(), 0, diagonal
-
-        max_triangles = 90000
-        stride = max(1, math.ceil(len(triangles) / max_triangles))
-        sampled_triangles = triangles[::stride]
-        center = (
-            float(bbox.xmin + bbox.xmax) / 2.0,
-            float(bbox.ymin + bbox.ymax) / 2.0,
-            float(bbox.zmin + bbox.zmax) / 2.0,
-        )
-
-        payload = bytearray()
-        vertex_count = 0
-        for indexes in sampled_triangles:
-            p1 = self._normalize_vertex(vertices[indexes[0]], center)
-            p2 = self._normalize_vertex(vertices[indexes[1]], center)
-            p3 = self._normalize_vertex(vertices[indexes[2]], center)
-            nx, ny, nz = self._triangle_normal(p1, p2, p3)
-            payload.extend(struct.pack("6f", *p1, nx, ny, nz))
-            payload.extend(struct.pack("6f", *p2, nx, ny, nz))
-            payload.extend(struct.pack("6f", *p3, nx, ny, nz))
-            vertex_count += 3
-
-        return QByteArray(bytes(payload)), vertex_count, diagonal
-
-    def _create_geometry(self, parent: Any, mesh_bytes: QByteArray, vertex_count: int) -> Any:
+    def _create_geometry(self, parent: Any, mesh_bytes: Any, vertex_count: int) -> Any:
         geometry = Qt3DCore.QGeometry(parent)
         buffer = Qt3DCore.QBuffer(geometry)
         buffer.setData(mesh_bytes)
@@ -192,31 +262,6 @@ class AssemblyPreviewWidget(QWidget):
         geometry.addAttribute(normal_attribute)
         return geometry
 
-    @staticmethod
-    def _normalize_vertex(vertex: Any, center: tuple[float, float, float]) -> tuple[float, float, float]:
-        raw = vertex.toTuple() if hasattr(vertex, "toTuple") else tuple(vertex)
-        return (
-            float(raw[0]) - center[0],
-            float(raw[1]) - center[1],
-            float(raw[2]) - center[2],
-        )
-
-    @staticmethod
-    def _triangle_normal(
-        p1: tuple[float, float, float],
-        p2: tuple[float, float, float],
-        p3: tuple[float, float, float],
-    ) -> tuple[float, float, float]:
-        ux, uy, uz = p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]
-        vx, vy, vz = p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]
-        nx = uy * vz - uz * vy
-        ny = uz * vx - ux * vz
-        nz = ux * vy - uy * vx
-        length = math.sqrt(nx * nx + ny * ny + nz * nz)
-        if length <= 1e-9:
-            return 0.0, 0.0, 1.0
-        return nx / length, ny / length, nz / length
-
 
 class ModelPreviewPanel(QFrame):
     """3D viewer shell with a lightweight interactive preview."""
@@ -236,5 +281,12 @@ class ModelPreviewPanel(QFrame):
         self.surface = AssemblyPreviewWidget()
         layout.addWidget(self.surface, stretch=1)
 
-    def load_document(self, document: ProjectDocument | None) -> None:
-        self.surface.load_assembly(None if document is None else document.assembly)
+    def load_document(self, document: ProjectDocument | None, *, progressive: bool = False) -> None:
+        if document is None:
+            self.surface.load_assembly(None)
+            return
+
+        self.surface.load_assembly(document.stack_preview_assembly or document.assembly, progressive=progressive)
+
+    def append_progressive_mesh(self, mesh_bytes: QByteArray, vertex_count: int, diagonal: float) -> None:
+        self.surface.append_progressive_mesh(mesh_bytes, vertex_count, diagonal)

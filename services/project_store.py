@@ -12,6 +12,8 @@ from core.geometry.converter import BondingElement
 from core.pipeline_types import DRCReport
 from core.raw_dxf_types import LayerInfo, RawEntity, SceneRect
 
+LayerOverride = dict[str, bool | str | None]
+
 
 @dataclass
 class ProjectDocument:
@@ -23,9 +25,13 @@ class ProjectDocument:
     scene_rect: SceneRect
     raw_counts: Counter[str]
     layer_info: list[LayerInfo] = field(default_factory=list)
+    enabled_layers: set[str] = field(default_factory=set)
+    layer_mapping_overrides: dict[str, str] = field(default_factory=dict)
     parser_elements: list[BondingElement] = field(default_factory=list)
     converted_counts: Counter[str] = field(default_factory=Counter)
     coordinates: list[BondPoint] = field(default_factory=list)
+    entity_thicknesses: dict[int, float] = field(default_factory=dict)
+    selected_entity_index: int | None = None
     drc_report: DRCReport = field(
         default_factory=lambda: {
             "passed": True,
@@ -36,6 +42,7 @@ class ProjectDocument:
         }
     )
     assembly: Any | None = None
+    stack_preview_assembly: Any | None = None
     output_path: Path | None = None
     status: str = "ready"
     used_fallback: bool = False

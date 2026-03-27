@@ -117,52 +117,59 @@ class BondingDiagramConverter:
         except Exception:
             return path
 
-    def convert_elements(self, elements: List[BondingElement]) -> cq.Assembly:
-        assembly = cq.Assembly()
+    def _append_element(self, assembly: cq.Assembly, element: BondingElement) -> None:
+        if element.element_type == "wire":
+            wire_spec = resolve_wire_element_spec(
+                element.geometry,
+                element.properties,
+                self.default_wire_diameter,
+                self.default_material,
+                self.calculate_loop_height,
+            )
+            wire = WireLoop(
+                p1=cq.Vector(wire_spec.start),
+                p2=cq.Vector(wire_spec.end),
+                loop_height=wire_spec.loop_height,
+                wire_diameter=wire_spec.wire_diameter,
+                material=wire_spec.material,
+            )
+            assembly.add(self.create_wire_loop(wire), name=f"wire_{len(assembly.objects)}")
+        elif element.element_type == "die_pad":
+            pad_spec = resolve_die_pad_spec(element.geometry, element.properties)
+            assembly.add(
+                self.create_die_pad(
+                    x=pad_spec.x,
+                    y=pad_spec.y,
+                    z=pad_spec.z,
+                    width=pad_spec.width,
+                    height=pad_spec.height,
+                    thickness=pad_spec.thickness,
+                    radius=pad_spec.radius,
+                ),
+                name=f"die_pad_{len(assembly.objects)}",
+            )
+        elif element.element_type == "lead_frame":
+            lead_frame_spec = resolve_lead_frame_spec(element.geometry, element.properties)
+            assembly.add(
+                self.create_lead_frame(
+                    points=lead_frame_spec.points,
+                    width=lead_frame_spec.width,
+                    thickness=lead_frame_spec.thickness,
+                ),
+                name=f"lead_frame_{len(assembly.objects)}",
+            )
+
+    def append_elements(self, assembly: cq.Assembly, elements: List[BondingElement]) -> cq.Assembly:
+        """Append converted elements into an existing assembly."""
 
         for element in elements:
-            if element.element_type == "wire":
-                wire_spec = resolve_wire_element_spec(
-                    element.geometry,
-                    element.properties,
-                    self.default_wire_diameter,
-                    self.default_material,
-                    self.calculate_loop_height,
-                )
-                wire = WireLoop(
-                    p1=cq.Vector(wire_spec.start),
-                    p2=cq.Vector(wire_spec.end),
-                    loop_height=wire_spec.loop_height,
-                    wire_diameter=wire_spec.wire_diameter,
-                    material=wire_spec.material,
-                )
-                assembly.add(self.create_wire_loop(wire), name=f"wire_{len(assembly.objects)}")
-            elif element.element_type == "die_pad":
-                pad_spec = resolve_die_pad_spec(element.geometry, element.properties)
-                assembly.add(
-                    self.create_die_pad(
-                        x=pad_spec.x,
-                        y=pad_spec.y,
-                        z=pad_spec.z,
-                        width=pad_spec.width,
-                        height=pad_spec.height,
-                        thickness=pad_spec.thickness,
-                        radius=pad_spec.radius,
-                    ),
-                    name=f"die_pad_{len(assembly.objects)}",
-                )
-            elif element.element_type == "lead_frame":
-                lead_frame_spec = resolve_lead_frame_spec(element.geometry, element.properties)
-                assembly.add(
-                    self.create_lead_frame(
-                        points=lead_frame_spec.points,
-                        width=lead_frame_spec.width,
-                        thickness=lead_frame_spec.thickness,
-                    ),
-                    name=f"lead_frame_{len(assembly.objects)}",
-                )
+            self._append_element(assembly, element)
 
         return assembly
+
+    def convert_elements(self, elements: List[BondingElement]) -> cq.Assembly:
+        assembly = cq.Assembly()
+        return self.append_elements(assembly, elements)
 
     def export_step(self, assembly: cq.Assembly, output_path: str) -> bool:
         try:

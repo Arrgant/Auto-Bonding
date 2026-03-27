@@ -23,13 +23,14 @@ def _update_bounds(bounds: dict[str, float] | None, x_value: float, y_value: flo
     return bounds
 
 
-def load_raw_dxf_entities(
-    file_path: Path,
+def load_raw_dxf_entities_from_document(
+    document: ezdxf.document.Drawing,
     layer_mapping: dict[str, str] | None = None,
+    enabled_layers: set[str] | None = None,
 ) -> tuple[list[RawEntity], SceneRect, Counter, list[LayerInfo]]:
-    document = ezdxf.readfile(str(file_path))
     modelspace = document.modelspace()
     normalized_mapping = {str(name).upper(): value for name, value in (layer_mapping or {}).items()}
+    normalized_enabled = {str(name) for name in enabled_layers} if enabled_layers is not None else None
 
     entities: list[RawEntity] = []
     counts: Counter = Counter()
@@ -40,9 +41,13 @@ def load_raw_dxf_entities(
     for entity in modelspace:
         entity_type = entity.dxftype()
         layer_name = str(entity.dxf.layer)
-        counts[entity_type] += 1
         layer_entity_counts[layer_name] += 1
         layer_type_counts[layer_name][entity_type] += 1
+
+        if normalized_enabled is not None and layer_name not in normalized_enabled:
+            continue
+
+        counts[entity_type] += 1
 
         raw_entity, bound_points = extract_raw_entity(entity, entity_type, layer_name)
         if raw_entity is None:
@@ -53,8 +58,23 @@ def load_raw_dxf_entities(
             bounds = _update_bounds(bounds, x_value, y_value)
 
     scene_rect = build_scene_rect(bounds)
-    layer_info = build_layer_info(document, layer_entity_counts, layer_type_counts, normalized_mapping)
+    layer_info = build_layer_info(
+        document,
+        layer_entity_counts,
+        layer_type_counts,
+        normalized_mapping,
+        normalized_enabled,
+    )
     return entities, scene_rect, counts, layer_info
+
+
+def load_raw_dxf_entities(
+    file_path: Path,
+    layer_mapping: dict[str, str] | None = None,
+    enabled_layers: set[str] | None = None,
+) -> tuple[list[RawEntity], SceneRect, Counter, list[LayerInfo]]:
+    document = ezdxf.readfile(str(file_path))
+    return load_raw_dxf_entities_from_document(document, layer_mapping, enabled_layers)
 
 
 def extract_coordinates_from_raw_entities(raw_entities: list[RawEntity]) -> list[BondPoint]:
