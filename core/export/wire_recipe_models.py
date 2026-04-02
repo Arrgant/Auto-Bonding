@@ -24,6 +24,7 @@ class WireRecipeTemplate:
     default_z: float = 0.0
     ordering: WireOrderingConfig = field(default_factory=WireOrderingConfig)
     header_defaults: dict[str, TemplateScalar] = field(default_factory=dict)
+    pfile_cell_overrides: dict[str, TemplateScalar] = field(default_factory=dict)
     record_defaults: dict[str, TemplateScalar] = field(default_factory=dict)
     role_record_defaults: dict[str, dict[str, TemplateScalar]] = field(default_factory=dict)
     wb1_field_map: dict[str, int] = field(default_factory=dict)
@@ -51,6 +52,7 @@ class WireRecipeTemplate:
                 "group_no": self.ordering.group_no,
             },
             "header_defaults": dict(self.header_defaults),
+            "pfile_cell_overrides": dict(self.pfile_cell_overrides),
             "record_defaults": dict(self.record_defaults),
             "role_record_defaults": {
                 role: dict(values) for role, values in sorted(self.role_record_defaults.items())
@@ -85,6 +87,7 @@ class WireRecipeTemplate:
             default_z=float(payload.get("default_z", 0.0)),
             ordering=ordering,
             header_defaults=_coerce_scalar_mapping(payload.get("header_defaults")),
+            pfile_cell_overrides=_coerce_cell_override_mapping(payload.get("pfile_cell_overrides")),
             record_defaults=_coerce_scalar_mapping(payload.get("record_defaults")),
             role_record_defaults=_coerce_role_scalar_mapping(payload.get("role_record_defaults")),
             wb1_field_map=_coerce_int_mapping(payload.get("wb1_field_map")),
@@ -123,6 +126,21 @@ def _coerce_int_mapping(value: object) -> dict[str, int]:
             coerced[key] = int(item)
         except (TypeError, ValueError):
             continue
+    return coerced
+
+
+def _coerce_cell_override_mapping(value: object) -> dict[str, TemplateScalar]:
+    if not isinstance(value, dict):
+        return {}
+    coerced: dict[str, TemplateScalar] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            continue
+        cell_ref = key.strip().upper()
+        if not cell_ref:
+            continue
+        if isinstance(item, (bool, int, float, str)):
+            coerced[cell_ref] = item
     return coerced
 
 

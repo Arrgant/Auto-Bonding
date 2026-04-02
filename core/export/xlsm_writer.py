@@ -106,6 +106,7 @@ class XLSMWriter:
             )
 
             wb_sheet_path = _find_sheet_path(workbook_tree, workbook_rels_tree, "WB")
+            pfile_sheet_path = _find_sheet_path(workbook_tree, workbook_rels_tree, "PFILE")
             replacements = {
                 "xl/workbook.xml": _xml_bytes(workbook_tree),
                 "xl/_rels/workbook.xml.rels": _xml_bytes(workbook_rels_tree),
@@ -121,6 +122,13 @@ class XLSMWriter:
             )
             if wb_sheet_replacement is not None and wb_sheet_path is not None:
                 replacements[wb_sheet_path] = wb_sheet_replacement
+            pfile_sheet_replacement = self._build_pfile_sheet_replacement(
+                archive,
+                template,
+                pfile_sheet_path=pfile_sheet_path,
+            )
+            if pfile_sheet_replacement is not None and pfile_sheet_path is not None:
+                replacements[pfile_sheet_path] = pfile_sheet_replacement
             _copy_archive_with_replacements(archive, target_path, replacements)
 
         return target_path
@@ -142,6 +150,22 @@ class XLSMWriter:
         wb1_content = self._wb1_writer.render(ordered_wires, template, output_name=wb1_output_name)
         worksheet = ET.fromstring(archive.read(wb_sheet_path))
         _populate_wb_worksheet(worksheet, wb1_content)
+        return _xml_bytes(worksheet)
+
+    def _build_pfile_sheet_replacement(
+        self,
+        archive: ZipFile,
+        template: WireRecipeTemplate,
+        *,
+        pfile_sheet_path: str | None,
+    ) -> bytes | None:
+        if pfile_sheet_path is None:
+            return None
+        if not template.pfile_cell_overrides:
+            return None
+
+        worksheet = ET.fromstring(archive.read(pfile_sheet_path))
+        _apply_sheet_cell_overrides(worksheet, template.pfile_cell_overrides)
         return _xml_bytes(worksheet)
 
 
@@ -246,6 +270,34 @@ def _populate_wb_worksheet(worksheet: ET.Element, wb1_content: str, *, start_row
     max_row = max([start_row + len(lines) - 1, *[int(row.attrib.get("r", "0")) for row in preserved_rows]], default=start_row)
     min_row = min([int(row.attrib.get("r", "0")) for row in sheet_data.findall(_qn(MAIN_NS, "row"))], default=start_row)
     dimension.set("ref", f"A{min_row}:{_excel_column(max_fields)}{max_row}")
+
+
+def _apply_sheet_cell_overrides(worksheet: ET.Element, overrides: dict[str, object]) -> None:
+    if not overrides:
+        return
+    sheet_data = worksheet.find(_qn(MAIN_NS, "sheetData"))
+    if sheet_data is None:
+        sheet_data = ET.SubElement(worksheet, _qn(MAIN_NS, "sheetData"))
+
+    row_map = {int(row.attrib.get("r", "0")): row for row in sheet_data.findall(_qn(MAIN_NS, "row"))}
+    applied_refs: list[str] = []
+
+    for cell_ref, value in sorted(overrides.items(), key=lambda item: _cell_sort_key(item[0])):
+        row_number, _ = _split_cell_ref(cell_ref)
+        row = row_map.get(row_number)
+        if row is None:
+            row = ET.Element(_qn(MAIN_NS, "row"), {"r": str(row_number)})
+            _insert_row_sorted(sheet_data, row)
+            row_map[row_number] = row
+        cell = _find_row_cell(row, cell_ref)
+        if cell is None:
+            cell = ET.Element(_qn(MAIN_NS, "c"), {"r": cell_ref})
+            _insert_cell_sorted(row, cell)
+        _set_cell_value(cell, value)
+        applied_refs.append(cell_ref)
+
+    if applied_refs:
+        _expand_dimension_for_refs(worksheet, applied_refs)
 
 
 def _require_template_path(template: WireRecipeTemplate) -> Path:
@@ -369,6 +421,26 @@ def _split_wb1_tokens(line: str) -> list[str]:
     return [token for token in line.split(",") if token]
 
 
+def _set_cell_value(cell: ET.Element, value: object) -> None:
+    for child in list(cell):
+        if child.tag in {_qn(MAIN_NS, "v"), _qn(MAIN_NS, "is")}:
+            cell.remove(child)
+
+    if isinstance(value, str):
+        cell.set("t", "inlineStr")
+        inline_string = ET.SubElement(cell, _qn(MAIN_NS, "is"))
+        ET.SubElement(inline_string, _qn(MAIN_NS, "t")).text = value
+        return
+
+    if isinstance(value, bool):
+        value = 1 if value else 0
+    if not isinstance(value, (int, float)):
+        raise TypeError(f"Unsupported worksheet cell override value: {value!r}")
+    if "t" in cell.attrib:
+        cell.attrib.pop("t", None)
+    ET.SubElement(cell, _qn(MAIN_NS, "v")).text = _format_number(value)
+
+
 def _column_index_from_ref(cell_ref: str) -> int:
     letters = []
     for char in cell_ref:
@@ -380,6 +452,88 @@ def _column_index_from_ref(cell_ref: str) -> int:
     for char in letters:
         index = index * 26 + (ord(char) - 64)
     return max(index, 1)
+
+
+def _split_cell_ref(cell_ref: str) -> tuple[int, int]:
+    letters = []
+    digits = []
+    for char in cell_ref:
+        if char.isalpha():
+            letters.append(char.upper())
+        elif char.isdigit():
+            digits.append(char)
+    row_number = int("".join(digits) or "1")
+    column_number = _column_index_from_ref("".join(letters) or "A")
+    return row_number, column_number
+
+
+def _cell_sort_key(cell_ref: str) -> tuple[int, int]:
+    row_number, column_number = _split_cell_ref(cell_ref)
+    return row_number, column_number
+
+
+def _find_row_cell(row: ET.Element, cell_ref: str) -> ET.Element | None:
+    for cell in row.findall(_qn(MAIN_NS, "c")):
+        if cell.attrib.get("r") == cell_ref:
+            return cell
+    return None
+
+
+def _insert_row_sorted(sheet_data: ET.Element, row: ET.Element) -> None:
+    row_number = int(row.attrib["r"])
+    inserted = False
+    for index, existing_row in enumerate(sheet_data.findall(_qn(MAIN_NS, "row"))):
+        if int(existing_row.attrib.get("r", "0")) > row_number:
+            sheet_data.insert(index, row)
+            inserted = True
+            break
+    if not inserted:
+        sheet_data.append(row)
+
+
+def _insert_cell_sorted(row: ET.Element, cell: ET.Element) -> None:
+    _, target_column = _split_cell_ref(cell.attrib["r"])
+    inserted = False
+    for index, existing_cell in enumerate(row.findall(_qn(MAIN_NS, "c"))):
+        _, existing_column = _split_cell_ref(existing_cell.attrib.get("r", "A1"))
+        if existing_column > target_column:
+            row.insert(index, cell)
+            inserted = True
+            break
+    if not inserted:
+        row.append(cell)
+
+
+def _expand_dimension_for_refs(worksheet: ET.Element, cell_refs: list[str]) -> None:
+    if not cell_refs:
+        return
+    dimension = worksheet.find(_qn(MAIN_NS, "dimension"))
+    rows = []
+    columns = []
+    for cell_ref in cell_refs:
+        row_number, column_number = _split_cell_ref(cell_ref)
+        rows.append(row_number)
+        columns.append(column_number)
+
+    min_row = min(rows)
+    max_row = max(rows)
+    min_column = min(columns)
+    max_column = max(columns)
+
+    if dimension is not None and "ref" in dimension.attrib:
+        start_ref, _, end_ref = dimension.attrib["ref"].partition(":")
+        existing_start_row, existing_start_col = _split_cell_ref(start_ref)
+        existing_end_row, existing_end_col = _split_cell_ref(end_ref or start_ref)
+        min_row = min(min_row, existing_start_row)
+        max_row = max(max_row, existing_end_row)
+        min_column = min(min_column, existing_start_col)
+        max_column = max(max_column, existing_end_col)
+    else:
+        if dimension is None:
+            dimension = ET.Element(_qn(MAIN_NS, "dimension"))
+            worksheet.insert(0, dimension)
+
+    dimension.set("ref", f"{_excel_column(min_column)}{min_row}:{_excel_column(max_column)}{max_row}")
 
 
 def _qn(namespace: str, local_name: str) -> str:
