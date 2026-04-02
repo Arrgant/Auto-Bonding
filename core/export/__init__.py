@@ -1,6 +1,7 @@
 """Export helpers for Auto-Bonding."""
 
 from .coordinates import BondPoint, CoordinateExporter
+from .wb1_parser import ParsedWB1Document, ParsedWB1Record, WB1Parser
 from .wb1_writer import WB1Writer
 from .wire_extraction import extract_wire_geometries
 from .wire_models import OrderedWireRecord, WireGeometry, WireOrderingConfig, WirePoint
@@ -14,7 +15,10 @@ __all__ = [
     "BondPoint",
     "CoordinateExporter",
     "OrderedWireRecord",
+    "ParsedWB1Document",
+    "ParsedWB1Record",
     "RX2000_STARTER_WB1_FIELD_MAP",
+    "WB1Parser",
     "WB1Writer",
     "WireProductionExporter",
     "WireProductionExportResult",
