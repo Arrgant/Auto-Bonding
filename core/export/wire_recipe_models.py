@@ -51,6 +51,7 @@ class WireRecipeTemplate:
                 "primary_direction": self.ordering.primary_direction,
                 "secondary_direction": self.ordering.secondary_direction,
                 "start_role": self.ordering.start_role,
+                "group_mode": self.ordering.group_mode,
                 "group_no": self.ordering.group_no,
             },
             "header_defaults": dict(self.header_defaults),
@@ -78,6 +79,7 @@ class WireRecipeTemplate:
             primary_direction=str(ordering_payload.get("primary_direction", "asc")),  # type: ignore[arg-type]
             secondary_direction=str(ordering_payload.get("secondary_direction", "asc")),  # type: ignore[arg-type]
             start_role=str(ordering_payload.get("start_role", "first")),  # type: ignore[arg-type]
+            group_mode=str(ordering_payload.get("group_mode", "fixed")),  # type: ignore[arg-type]
             group_no=int(ordering_payload.get("group_no", 1)),
         )
 

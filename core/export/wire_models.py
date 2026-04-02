@@ -10,6 +10,7 @@ from ..raw_dxf_types import Point2D
 WirePointRole = Literal["first", "second"]
 WireAxis = Literal["x", "y"]
 WireDirection = Literal["asc", "desc"]
+WireGroupMode = Literal["fixed", "clustered"]
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ class WireOrderingConfig:
     primary_direction: WireDirection = "asc"
     secondary_direction: WireDirection = "asc"
     start_role: WirePointRole = "first"
+    group_mode: WireGroupMode = "fixed"
     group_no: int = 1
 
 
@@ -74,6 +76,7 @@ __all__ = [
     "OrderedWireRecord",
     "WireAxis",
     "WireDirection",
+    "WireGroupMode",
     "WireGeometry",
     "WireOrderingConfig",
     "WirePoint",

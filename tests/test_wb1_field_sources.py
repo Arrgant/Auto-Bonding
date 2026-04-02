@@ -23,6 +23,7 @@ def test_rx2000_dxf_field_classification_matches_current_plan():
     )
     assert rx2000_fields_currently_written_from_dxf() == (
         "role_code",
+        "group_no",
         "bond_x",
         "bond_y",
     )
@@ -33,7 +34,7 @@ def test_rx2000_selected_field_sources_capture_current_behavior():
     assert RX2000_WB1_FIELD_SOURCES["bond_x"].current_from_dxf is True
 
     assert RX2000_WB1_FIELD_SOURCES["group_no"].dxf_availability == "derived"
-    assert RX2000_WB1_FIELD_SOURCES["group_no"].current_from_dxf is False
+    assert RX2000_WB1_FIELD_SOURCES["group_no"].current_from_dxf is True
 
     assert RX2000_WB1_FIELD_SOURCES["bond_z"].dxf_availability == "3d_only"
     assert RX2000_WB1_FIELD_SOURCES["bond_z"].current_source == "default_z fallback"

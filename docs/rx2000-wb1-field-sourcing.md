@@ -99,7 +99,7 @@ Legend:
 | 16 | `pull_distance` | `no` | role template default | No | Pull recipe value. |
 | 17 | `start_relative_position` | `no` | role template default | No | Machine relative offset. |
 | 18 | `loop_accel` | `no` | shared template default | No | Loop motion tuning. |
-| 19 | `group_no` | `derived` | ordering config | No | Could come from geometric clustering later; current exporter uses one configured group number. |
+| 19 | `group_no` | `derived` | clustered ordering / fixed fallback | Yes | Current RX2000 default template derives group numbers from spatial wire clusters, while fixed mode is still available for custom templates. |
 | 20 | `rotation_height` | `no` | shared template default | No | Machine motion recipe value. |
 | 21 | `guide_distance` | `no` | shared template default | No | Tooling distance. |
 | 22 | `pull_force` | `no` | role template default | No | Pull recipe value. |
@@ -152,8 +152,8 @@ That means the safest near-term `WB1` generation strategy is:
 
 The next geometry-backed upgrades with the best payoff are:
 
-1. derive `group_no` from geometric clustering instead of one constant
-2. derive `bond_angle` from the wire endpoint vector
-3. carry real `bond_z` when the source workflow can provide it
+1. derive `bond_angle` from the wire endpoint vector
+2. carry real `bond_z` when the source workflow can provide it
+3. refine geometric clustering when more package layouts are available
 
 Until those are in place, template defaults remain the correct source for those fields.

@@ -17,7 +17,7 @@ def test_wire_recipe_template_store_round_trips_templates(tmp_path):
         xlsm_template_path="C:/fixtures/sample.xlsm",
         coord_scale=5.0,
         default_z=320.0,
-        ordering=WireOrderingConfig(primary_axis="y", group_no=3),
+        ordering=WireOrderingConfig(primary_axis="y", group_mode="clustered", group_no=3),
         header_defaults={"wire_size_code": 3},
         pfile_field_map={"search_force": "A4"},
         pfile_named_defaults={"search_force": 25},
@@ -39,6 +39,7 @@ def test_wire_recipe_template_store_round_trips_templates(tmp_path):
     assert loaded.template_id == "rx2000-default"
     assert loaded.wb1_template_path == "C:/fixtures/sample.WB1"
     assert loaded.ordering.primary_axis == "y"
+    assert loaded.ordering.group_mode == "clustered"
     assert loaded.ordering.group_no == 3
     assert loaded.pfile_field_map["search_force"] == "A4"
     assert loaded.pfile_named_defaults["search_force"] == 25
@@ -76,6 +77,7 @@ def test_wire_recipe_template_store_includes_builtin_rx2000_default(tmp_path):
     assert builtin.name == expected.name
     assert builtin.coord_scale == 5.0
     assert builtin.default_z == 1455.2
+    assert builtin.ordering.group_mode == "clustered"
     assert builtin.header_defaults["PRE:1:2"] == "002D"
     assert builtin.header_defaults["H:0:5"] == "0001"
     assert builtin.pfile_field_map["search_force"] == "A8"

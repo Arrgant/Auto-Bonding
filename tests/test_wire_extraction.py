@@ -74,3 +74,23 @@ def test_order_wire_geometries_assigns_wire_and_point_sequences():
     assert ordered[0].second_point_seq == 2
     assert ordered[1].first_point_seq == 3
     assert ordered[1].second_point_seq == 4
+
+
+def test_order_wire_geometries_can_cluster_group_numbers_from_geometry():
+    raw_entities = [
+        {"type": "LINE", "start": (0.0, 0.0), "end": (10.0, 0.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (0.0, 10.0), "end": (10.0, 10.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (100.0, 0.0), "end": (110.0, 0.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (100.0, 10.0), "end": (110.0, 10.0), "layer": "06_wire"},
+    ]
+    layer_info = [{"name": "06_wire", "mapped_type": "wire", "suggested_role": "wire"}]
+
+    wires = extract_wire_geometries(raw_entities, layer_info)
+    ordered = order_wire_geometries(
+        wires,
+        WireOrderingConfig(primary_axis="x", group_mode="clustered", group_no=5),
+    )
+
+    assert [record.wire_id for record in ordered] == ["W0001", "W0002", "W0003", "W0004"]
+    assert [record.group_no for record in ordered] == [5, 5, 6, 6]
+    assert [record.wire_seq for record in ordered] == [1, 2, 3, 4]

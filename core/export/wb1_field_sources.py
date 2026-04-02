@@ -158,9 +158,9 @@ RX2000_WB1_FIELD_SOURCES: dict[str, WB1FieldSourceInfo] = {
     "group_no": WB1FieldSourceInfo(
         field_name="group_no",
         dxf_availability="derived",
-        current_source="ordering config",
-        current_from_dxf=False,
-        note="Can be derived from geometric clustering later, but current exporter uses one configured group number.",
+        current_source="clustered ordering / fixed fallback",
+        current_from_dxf=True,
+        note="Current RX2000 default template derives group numbers from spatial wire clusters, while fixed mode is still available for custom templates.",
     ),
     "rotation_height": WB1FieldSourceInfo(
         field_name="rotation_height",

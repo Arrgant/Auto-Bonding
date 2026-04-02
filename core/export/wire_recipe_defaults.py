@@ -351,6 +351,7 @@ def build_rx2000_default_template() -> WireRecipeTemplate:
             primary_direction="asc",
             secondary_direction="asc",
             start_role="first",
+            group_mode="clustered",
             group_no=1,
         ),
         header_defaults=dict(RX2000_HEADER_DEFAULTS),

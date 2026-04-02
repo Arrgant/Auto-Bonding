@@ -277,19 +277,26 @@ class WireExportDialog(QDialog):
         ordering_layout.addWidget(QLabel("Tie Break"), 1, 0)
         ordering_layout.addWidget(self.secondary_direction_combo, 1, 1)
 
+        self.group_mode_combo = QComboBox()
+        self.group_mode_combo.addItem("Fixed", "fixed")
+        self.group_mode_combo.addItem("Clustered", "clustered")
+        self.group_mode_combo.currentIndexChanged.connect(self._refresh_preview)
+        ordering_layout.addWidget(QLabel("Grouping"), 1, 2)
+        ordering_layout.addWidget(self.group_mode_combo, 1, 3)
+
         self.start_role_combo = QComboBox()
         self.start_role_combo.addItem("First Bond First", "first")
         self.start_role_combo.addItem("Second Bond First", "second")
         self.start_role_combo.currentIndexChanged.connect(self._refresh_preview)
-        ordering_layout.addWidget(QLabel("Point Order"), 1, 2)
-        ordering_layout.addWidget(self.start_role_combo, 1, 3)
+        ordering_layout.addWidget(QLabel("Point Order"), 2, 0)
+        ordering_layout.addWidget(self.start_role_combo, 2, 1)
 
         self.group_no_spin = QSpinBox()
         self.group_no_spin.setRange(1, 999999)
         self.group_no_spin.setValue(1)
         self.group_no_spin.valueChanged.connect(self._refresh_preview)
-        ordering_layout.addWidget(QLabel("Group No"), 2, 0)
-        ordering_layout.addWidget(self.group_no_spin, 2, 1)
+        ordering_layout.addWidget(QLabel("Start Group"), 2, 2)
+        ordering_layout.addWidget(self.group_no_spin, 2, 3)
 
         form.addRow("Ordering", ordering_row)
         return group
@@ -511,6 +518,7 @@ class WireExportDialog(QDialog):
         self._set_combo_by_data(self.primary_axis_combo, template.ordering.primary_axis)
         self._set_combo_by_data(self.primary_direction_combo, template.ordering.primary_direction)
         self._set_combo_by_data(self.secondary_direction_combo, template.ordering.secondary_direction)
+        self._set_combo_by_data(self.group_mode_combo, template.ordering.group_mode)
         self._set_combo_by_data(self.start_role_combo, template.ordering.start_role)
         self.group_no_spin.setValue(template.ordering.group_no)
         self.record_defaults_edit.setPlainText(self._to_json(template.record_defaults))
@@ -678,6 +686,7 @@ class WireExportDialog(QDialog):
                 primary_direction=str(self.primary_direction_combo.currentData()),
                 secondary_direction=str(self.secondary_direction_combo.currentData()),
                 start_role=str(self.start_role_combo.currentData()),
+                group_mode=str(self.group_mode_combo.currentData()),
                 group_no=int(self.group_no_spin.value()),
             ),
             header_defaults=header_defaults,
@@ -757,8 +766,10 @@ class WireExportDialog(QDialog):
                 self.preview_table.setItem(row_index, column, QTableWidgetItem(value))
 
         if ordered_records:
+            group_count = len({record.group_no for record in ordered_records})
             self.preview_summary_label.setText(
-                f"{len(ordered_records)} wires detected. Showing the first {len(preview_records)} ordered rows."
+                f"{len(ordered_records)} wires detected across {group_count} group(s). "
+                f"Showing the first {len(preview_records)} ordered rows."
             )
         else:
             self.preview_summary_label.setText("No wire geometries are available in the current document.")
