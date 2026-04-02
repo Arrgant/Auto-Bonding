@@ -1,6 +1,12 @@
 """Export helpers for Auto-Bonding."""
 
 from .coordinates import BondPoint, CoordinateExporter
+from .wb1_field_sources import (
+    RX2000_WB1_FIELD_SOURCES,
+    WB1FieldSourceInfo,
+    rx2000_fields_available_from_dxf,
+    rx2000_fields_currently_written_from_dxf,
+)
 from .wb1_compare import WB1Comparer, WB1CompareResult, WB1Difference
 from .wb1_parser import ParsedWB1Document, ParsedWB1Record, WB1Parser
 from .wb1_writer import WB1Writer
@@ -19,9 +25,11 @@ __all__ = [
     "ParsedWB1Document",
     "ParsedWB1Record",
     "RX2000_STARTER_WB1_FIELD_MAP",
+    "RX2000_WB1_FIELD_SOURCES",
     "WB1Comparer",
     "WB1CompareResult",
     "WB1Difference",
+    "WB1FieldSourceInfo",
     "WB1Parser",
     "WB1Writer",
     "WireProductionExporter",
@@ -34,4 +42,6 @@ __all__ = [
     "build_rx2000_default_template",
     "extract_wire_geometries",
     "order_wire_geometries",
+    "rx2000_fields_available_from_dxf",
+    "rx2000_fields_currently_written_from_dxf",
 ]
