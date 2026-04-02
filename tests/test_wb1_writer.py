@@ -281,7 +281,7 @@ def test_wb1_writer_applies_header_defaults_to_preamble_and_sections(tmp_path):
     assert lines[6] == "0000,0000,00FF,"
 
 
-def test_wb1_writer_can_optionally_derive_bond_angle_from_wire_vector(tmp_path):
+def test_wb1_writer_can_optionally_derive_bond_angle_from_wire_vector_plus_90(tmp_path):
     template_path = tmp_path / "angle-template.WB1"
     template_path.write_text(
         "\n".join(
@@ -321,8 +321,8 @@ def test_wb1_writer_can_optionally_derive_bond_angle_from_wire_vector(tmp_path):
 
     lines = WB1Writer().render(ordered_wires, template, output_name="ANGLE.WB1").splitlines()
 
-    assert lines[2] == "0000,0001,002D,"
-    assert lines[3] == "0002,0001,002D,"
+    assert lines[2] == "0000,0001,0087,"
+    assert lines[3] == "0002,0001,0087,"
 
 
 def _wire_geometry(

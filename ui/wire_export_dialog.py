@@ -252,7 +252,7 @@ class WireExportDialog(QDialog):
 
         self.bond_angle_mode_combo = QComboBox()
         self.bond_angle_mode_combo.addItem("Template", "template")
-        self.bond_angle_mode_combo.addItem("Wire Vector (Heuristic)", "wire_vector")
+        self.bond_angle_mode_combo.addItem("Wire Vector + 90 deg (Heuristic)", "wire_vector")
         self.bond_angle_mode_combo.currentIndexChanged.connect(self._refresh_preview)
         form.addRow("Bond Angle", self.bond_angle_mode_combo)
 

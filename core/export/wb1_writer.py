@@ -296,7 +296,9 @@ def _scaled_coord(value: float, coord_scale: float) -> int:
 
 
 def _wire_vector_angle_word(record: OrderedWireRecord) -> int:
-    return int(round(record.geometry.angle_deg))
+    # Real RX2000 samples line up much more closely with the wire vector rotated
+    # by +90 degrees than with the raw segment heading itself.
+    return int(round(record.geometry.angle_deg + 90.0))
 
 
 def _encode_hex_word(value: int) -> str:

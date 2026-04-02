@@ -125,7 +125,7 @@ Legend:
 | 42 | `bond_z` | `3d_only` | default Z fallback | No | Only geometry-backed if the source workflow carries real Z. |
 | 43 | `reserved_ar` | `no` | shared template default | No | Reserved/unknown; keep template-controlled. |
 | 44 | `contact_surface_position` | `no` | role template default | No | Process-specific contact setting. |
-| 45 | `bond_angle` | `derived` | shared template default / optional wire_vector mode | No | The exporter can optionally write the wire vector angle, but RX2000 default templates still keep bond angle template-driven until machine validation confirms the heuristic. |
+| 45 | `bond_angle` | `derived` | shared template default / optional wire_vector mode | No | The exporter can optionally write a wire-vector-plus-90 heuristic, but RX2000 default templates still keep bond angle template-driven until machine validation confirms the rule. |
 | 46 | `climb_angle` | `no` | shared template default | No | Machine motion recipe value. |
 | 47 | `start_pressure` | `no` | shared template default | No | Bond force recipe value. |
 | 48 | `end_pressure` | `no` | shared template default | No | Bond force recipe value. |
@@ -152,7 +152,7 @@ That means the safest near-term `WB1` generation strategy is:
 
 The next geometry-backed upgrades with the best payoff are:
 
-1. derive `bond_angle` from the wire endpoint vector
+1. validate the current `bond_angle` wire-vector-plus-90 heuristic against more production samples
 2. carry real `bond_z` when the source workflow can provide it
 3. refine geometric clustering when more package layouts are available
 
