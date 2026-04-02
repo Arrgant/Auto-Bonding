@@ -3,7 +3,9 @@
 from .export.coordinates import BondPoint, CoordinateExporter
 from .export.wb1_writer import WB1Writer
 from .export.wire_extraction import extract_wire_geometries
+from .export.xlsm_writer import XLSMWriter
 from .export.wire_models import OrderedWireRecord, WireGeometry, WireOrderingConfig, WirePoint
+from .export.wire_production_exporter import WireProductionExporter, WireProductionExportResult
 from .export.wire_recipe_models import WireRecipeTemplate
 from .export.wire_ordering import order_wire_geometries
 from .geometry.converter import BondingDiagramConverter, BondingElement, WireLoop
@@ -59,6 +61,9 @@ __all__ = [
     "SemanticEntity",
     "OrderedWireRecord",
     "WB1Writer",
+    "XLSMWriter",
+    "WireProductionExporter",
+    "WireProductionExportResult",
     "WireGeometry",
     "WireLoop",
     "WireOrderingConfig",
