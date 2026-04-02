@@ -25,7 +25,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core import BondingDiagramConverter, CoordinateExporter, PreparedDocument, RawImportPreview
+from core import (
+    BondingDiagramConverter,
+    CoordinateExporter,
+    PreparedDocument,
+    RawImportPreview,
+    WireProductionExporter,
+)
 from core.layer_colors import build_layer_color_map
 from core.layer_semantics import apply_layer_role_overrides
 from core.layer_stack import build_stacked_preview_assembly, layer_sort_key
@@ -36,12 +42,13 @@ from core.semantic import (
     classify_semantic_layers,
     manual_override_entity_key,
 )
-from services import LayerSemanticPresetStore, ProjectDocument
+from services import LayerSemanticPresetStore, ProjectDocument, WireRecipeTemplateStore
 
 from .import_worker import ImportWorker
 from .layer_config_dialog import LayerConfigDialog
 from .layer_semantic_preset_dialog import LayerSemanticPresetDialog
 from .stack_preview_worker import StackPreviewWorker
+from .wire_export_dialog import WireExportDialog
 from .widgets import DXFPreviewView, LayerManagerPanel, ModelPreviewPanel, SemanticObjectsPanel
 
 
@@ -54,7 +61,9 @@ class MainWindow(QMainWindow):
         self.output_directory = Path.cwd() / "output"
         self.output_directory.mkdir(exist_ok=True)
         self.exporter = CoordinateExporter()
+        self.wire_production_exporter = WireProductionExporter()
         self.layer_semantic_store = LayerSemanticPresetStore()
+        self.wire_template_store = WireRecipeTemplateStore()
         self._import_thread: QThread | None = None
         self._import_worker: ImportWorker | None = None
         self._stack_preview_thread: QThread | None = None
@@ -220,6 +229,10 @@ class MainWindow(QMainWindow):
         export_coordinates_action = QAction("Export Coordinates", button)
         export_coordinates_action.triggered.connect(self._export_coordinates)
         menu.addAction(export_coordinates_action)
+
+        export_wire_action = QAction("Export Wire Production Files...", button)
+        export_wire_action.triggered.connect(self._export_wire_production_files)
+        menu.addAction(export_wire_action)
 
         export_step_action = QAction("Export STEP", button)
         export_step_action.triggered.connect(self._export_step)
@@ -1011,7 +1024,7 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.import_button.setEnabled(True)
         self.layers_button.setEnabled(bool(self.document))
-        self.export_button.setEnabled(bool(self.document and self.document.assembly))
+        self.export_button.setEnabled(self._has_exportable_outputs())
 
     def _finish_import_thread(self, *_args: object) -> None:
         if self._import_thread is not None:
@@ -1049,7 +1062,16 @@ class MainWindow(QMainWindow):
         self.layers_button.setEnabled(
             self.document is not None and self._import_thread is None and not self._layer_walkthrough_active
         )
-        self.export_button.setEnabled(bool(self.document and self.document.assembly))
+        self.export_button.setEnabled(self._has_exportable_outputs())
+
+    def _has_exportable_outputs(self) -> bool:
+        return bool(
+            self.document
+            and (
+                self.document.assembly is not None
+                or self.document.wire_geometries
+            )
+        )
 
     def _set_import_actions_enabled(self, enabled: bool) -> None:
         self.preview.set_import_action_enabled(enabled)
@@ -1323,6 +1345,53 @@ class MainWindow(QMainWindow):
             return
 
         self.status_label.setText(f"Coordinates exported: {self.document.path.name}")
+
+    def _export_wire_production_files(self) -> None:
+        if self.document is None:
+            QMessageBox.information(self, "Wire production export", "Import a DXF file first.")
+            return
+        if not self.document.wire_geometries:
+            QMessageBox.information(
+                self,
+                "Wire production export",
+                "No 06_wire geometry was detected in the current document.",
+            )
+            return
+
+        dialog = WireExportDialog(
+            self.document,
+            self.wire_template_store,
+            self.output_directory,
+            self,
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+
+        request = dialog.export_request()
+        if request is None:
+            return
+
+        try:
+            result = self.wire_production_exporter.export_bundle(
+                self.document.wire_geometries,
+                request.template,
+                request.output_directory,
+                base_name=request.base_name,
+                export_wb1=request.export_wb1,
+                export_xlsm=request.export_xlsm,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Wire production export", str(exc))
+            return
+
+        self.output_directory = request.output_directory
+        exported_paths = [str(path) for path in (result.wb1_path, result.xlsm_path) if path is not None]
+        self.status_label.setText(f"Wire production files exported: {request.base_name}")
+        QMessageBox.information(
+            self,
+            "Wire production export",
+            "Export completed:\n" + "\n".join(exported_paths),
+        )
 
     def _export_step(self) -> None:
         if self.document is None or self.document.assembly is None:
