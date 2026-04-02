@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.Qt3DCore import Qt3DCore
 from PySide6.Qt3DExtras import Qt3DExtras
 from PySide6.Qt3DRender import Qt3DRender
 from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtGui import QColor, QVector3D
-from PySide6.QtWidgets import QFrame, QLabel, QStackedLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QStackedLayout, QVBoxLayout, QWidget
 
 from services import ProjectDocument
 
@@ -24,6 +24,7 @@ class AssemblyPreviewWidget(QWidget):
         super().__init__()
         self.setObjectName("ViewerSurface")
         self.setMinimumHeight(320)
+        self.import_requested_handler: Callable[[], None] | None = None
 
         self._window = Qt3DExtras.Qt3DWindow()
         self._window.defaultFrameGraph().setClearColor(QColor("#171717"))
@@ -34,9 +35,15 @@ class AssemblyPreviewWidget(QWidget):
         placeholder_layout = QVBoxLayout(self._placeholder_page)
         placeholder_layout.setContentsMargins(0, 0, 0, 0)
         placeholder_layout.addStretch(1)
-        self.placeholder = ViewerPlaceholder("3D Preview", "Import DXF", "cube")
+        self.placeholder = ViewerPlaceholder(
+            "3D Preview",
+            "Import a DXF to generate the stacked model.",
+            "cube",
+            action_text="Import DXF",
+        )
         placeholder_layout.addWidget(self.placeholder, alignment=Qt.AlignmentFlag.AlignCenter)
         placeholder_layout.addStretch(1)
+        self.placeholder.action_requested.connect(self._handle_import_requested)
 
         self._stack = QStackedLayout(self)
         self._stack.setContentsMargins(0, 0, 0, 0)
@@ -53,11 +60,13 @@ class AssemblyPreviewWidget(QWidget):
         self._reset_progressive_mesh()
 
         if assembly is None or not getattr(assembly, "objects", {}):
-            self.placeholder.set_content("3D Preview", "Import DXF")
+            self.placeholder.set_content("3D Preview", "Import a DXF to generate the stacked model.")
+            self.placeholder.set_action("Import DXF")
             self._empty_scene()
             return
 
         self.placeholder.set_content("3D Preview", "Building layer mesh" if progressive else "Generating mesh")
+        self.placeholder.set_action(None)
         self._stack.setCurrentWidget(self._placeholder_page)
         mesh_bytes, vertex_count, diagonal = build_mesh_payload(assembly, "coarse")
         self.load_mesh_payload(mesh_bytes, vertex_count, diagonal)
@@ -66,7 +75,8 @@ class AssemblyPreviewWidget(QWidget):
         """Load one ready-to-render mesh payload into the Qt3D scene."""
 
         if vertex_count <= 0:
-            self.placeholder.set_content("3D Preview", "Model unavailable")
+            self.placeholder.set_content("3D Preview", "Unable to build a mesh from the current data.")
+            self.placeholder.set_action(None)
             self._empty_scene()
             return
 
@@ -79,7 +89,8 @@ class AssemblyPreviewWidget(QWidget):
 
         valid_layers = [payload for payload in layer_meshes if int(payload.get("vertex_count", 0)) > 0]
         if not valid_layers:
-            self.placeholder.set_content("3D Preview", "Model unavailable")
+            self.placeholder.set_content("3D Preview", "Unable to build a mesh from the current layers.")
+            self.placeholder.set_action(None)
             self._empty_scene()
             return
 
@@ -115,6 +126,20 @@ class AssemblyPreviewWidget(QWidget):
         self._current_root = Qt3DCore.QEntity()
         self._window.setRootEntity(self._current_root)
         self._stack.setCurrentWidget(self._placeholder_page)
+
+    def show_placeholder(self, caption: str, *, action_text: str | None = None) -> None:
+        self.placeholder.set_content("3D Preview", caption)
+        self.placeholder.set_action(action_text)
+        self._empty_scene()
+
+    def set_import_action_enabled(self, enabled: bool) -> None:
+        if not self.placeholder.action_button.isVisible():
+            return
+        self.placeholder.set_action(self.placeholder.action_button.text(), enabled=enabled)
+
+    def _handle_import_requested(self) -> None:
+        if self.import_requested_handler is not None:
+            self.import_requested_handler()
 
     def shutdown(self) -> None:
         """Tear down the Qt3D scene before the widget is destroyed."""
@@ -251,20 +276,48 @@ class ModelPreviewPanel(QFrame):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
 
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(8)
+
         title = QLabel("3D Viewer")
         title.setObjectName("SectionTitle")
-        layout.addWidget(title)
+        header_row.addWidget(title)
+
+        self.status_badge = QLabel("Idle")
+        self.status_badge.setObjectName("ViewerStatus")
+        header_row.addWidget(self.status_badge)
+        header_row.addStretch(1)
+        layout.addLayout(header_row)
+
+        self.summary = QLabel("Import a DXF to start the stacked preview.")
+        self.summary.setObjectName("MutedLabel")
+        self.summary.setWordWrap(True)
+        layout.addWidget(self.summary)
 
         self.surface = AssemblyPreviewWidget()
         layout.addWidget(self.surface, stretch=1)
 
+    def set_import_requested_handler(self, handler: Callable[[], None] | None) -> None:
+        self.surface.import_requested_handler = handler
+
+    def set_import_action_enabled(self, enabled: bool) -> None:
+        self.surface.set_import_action_enabled(enabled)
+
     def load_document(self, document: ProjectDocument | None, *, progressive: bool = False) -> None:
         if document is None:
-            self.surface.load_assembly(None)
+            self._set_status("Idle")
+            self.summary.setText("Import a DXF to start the stacked preview.")
+            self.surface.show_placeholder("Import a DXF to generate the stacked model.", action_text="Import DXF")
             return
 
         if document.stack_preview_assembly is not None:
-            layer_meshes = build_layer_mesh_payloads(document.stack_preview_assembly, document.layer_colors)
+            self._set_status("Ready", tone="good")
+            self.summary.setText(document.note or "Stacked preview ready.")
+            layer_meshes = document.stack_preview_layer_meshes or build_layer_mesh_payloads(
+                document.stack_preview_assembly,
+                document.layer_colors,
+            )
             if layer_meshes:
                 self.surface.load_layer_meshes(layer_meshes)
             else:
@@ -272,17 +325,41 @@ class ModelPreviewPanel(QFrame):
             return
 
         if document.layer_meshes:
+            self._set_status("Ready", tone="good")
+            self.summary.setText(document.note or "Stacked preview ready.")
             self.surface.load_layer_meshes(document.layer_meshes)
             return
 
         if document.mesh_bytes is not None and document.mesh_vertex_count > 0:
+            self._set_status("Ready", tone="good")
+            self.summary.setText(document.note or "Stacked preview ready.")
             self.surface.load_mesh_payload(
                 document.mesh_bytes,
                 document.mesh_vertex_count,
                 document.mesh_diagonal,
             )
-        else:
+        elif document.assembly is not None:
+            self._set_status("Ready", tone="good")
+            self.summary.setText(document.note or "Stacked preview ready.")
             self.surface.load_assembly(document.assembly, progressive=progressive)
+        elif document.status == "building-3d":
+            self._set_status("Building", tone="busy")
+            self.summary.setText("Generating the stacked model from the current layer setup.")
+            self.surface.show_placeholder("Generating the stacked model from the current layers.")
+        elif document.status == "preview-ready":
+            self._set_status("2D Ready", tone="warn")
+            self.summary.setText("Set layer thickness to continue into the stacked 3D preview.")
+            self.surface.show_placeholder("Set layer thickness to continue into the stacked 3D preview.")
+        else:
+            self._set_status("Unavailable", tone="warn")
+            self.summary.setText(document.note or "3D preview is unavailable for the current document.")
+            self.surface.show_placeholder("3D preview is unavailable for the current document.")
+
+    def _set_status(self, text: str, *, tone: str = "neutral") -> None:
+        self.status_badge.setText(text)
+        self.status_badge.setProperty("tone", tone)
+        self.status_badge.style().unpolish(self.status_badge)
+        self.status_badge.style().polish(self.status_badge)
 
     def append_progressive_mesh(self, mesh_bytes: QByteArray, vertex_count: int, diagonal: float) -> None:
         self.surface.append_progressive_mesh(mesh_bytes, vertex_count, diagonal)

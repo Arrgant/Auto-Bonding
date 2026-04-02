@@ -6,6 +6,7 @@ from collections import Counter
 from typing import Any, NotRequired, TypedDict
 
 from .export.coordinates import BondPoint
+from .export.wire_models import WireGeometry
 from .geometry.converter import BondingElement
 from .raw_dxf_types import LayerInfo, RawEntity, SceneRect
 from .semantic import SemanticClassificationResult
@@ -31,6 +32,7 @@ class RawImportPreview(TypedDict):
     layer_info: list[LayerInfo]
     parser_elements: list[BondingElement]
     semantic_result: SemanticClassificationResult
+    wire_geometries: list[WireGeometry]
 
 
 class LayerMeshPayload(TypedDict):
@@ -55,6 +57,7 @@ class PreparedDocument(TypedDict):
     elements: list[BondingElement]
     converted_counts: Counter[str]
     coordinates: list[BondPoint]
+    wire_geometries: list[WireGeometry]
     drc_report: DRCReport
     assembly: Any
     layer_meshes: NotRequired[list[LayerMeshPayload]]

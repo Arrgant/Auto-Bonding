@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..fallback_helpers import detect_circle_like_profile
+from ..layer_semantics import suggest_layer_semantic_role
 from ..dxf_sampling import expand_lwpolyline_points, sample_bulge_segment
 from ..geometry.converter import BondingElement
 
@@ -11,13 +13,29 @@ from ..geometry.converter import BondingElement
 def resolve_element_type(layer: str, layer_mapping: dict[str, str]) -> str:
     """Resolve a DXF layer name into an internal bonding element type."""
 
-    return layer_mapping.get(layer.upper(), "unknown")
+    mapped = layer_mapping.get(layer.upper())
+    if mapped is not None:
+        return mapped
+
+    role = suggest_layer_semantic_role(layer)
+    role_mapping = {
+        "substrate": "substrate",
+        "hole": "hole",
+        "lead_frame": "lead_frame",
+        "pad": "die_pad",
+        "die_region": "die_pad",
+        "wire": "wire",
+    }
+    return role_mapping.get(role, "unknown")
 
 
 def parse_dxf_entity(entity: Any, element_type: str, layer: str) -> BondingElement | None:
     """Parse one DXF entity into a bonding element when supported."""
 
     entity_type = entity.dxftype()
+    if element_type == "substrate" and entity_type == "CIRCLE":
+        element_type = "round_feature"
+
     if entity_type == "LINE":
         return parse_line(entity, element_type, layer)
     if entity_type == "CIRCLE":
@@ -95,11 +113,35 @@ def parse_arc(entity: Any, element_type: str, layer: str) -> BondingElement:
 def parse_polyline(entity: Any, element_type: str, layer: str) -> BondingElement:
     """Parse an LWPOLYLINE entity, expanding bulge segments into sampled points."""
 
+    points = expand_polyline_points(entity)
+    if entity.closed and element_type in {"hole", "round_feature"}:
+        circle_feature = detect_circle_like_profile([(point[0], point[1]) for point in points])
+        if circle_feature is not None:
+            center_x, center_y, radius = circle_feature
+            properties = {
+                "layer": layer,
+                "shape": "circle",
+            }
+            if element_type == "hole":
+                properties["cut"] = True
+                properties["depth"] = 0.3
+            else:
+                properties["thickness"] = 0.05
+            return BondingElement(
+                element_type=element_type,
+                layer=layer,
+                geometry={
+                    "center": [center_x, center_y, 0.0],
+                    "radius": radius,
+                },
+                properties=properties,
+            )
+
     return BondingElement(
         element_type=element_type,
         layer=layer,
         geometry={
-            "points": expand_polyline_points(entity),
+            "points": points,
             "closed": entity.closed,
         },
         properties={

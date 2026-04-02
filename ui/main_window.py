@@ -6,7 +6,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QThread, QSize, Qt
+from PySide6.QtCore import QThread, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 from core import BondingDiagramConverter, CoordinateExporter, PreparedDocument, RawImportPreview
 from core.layer_colors import build_layer_color_map
 from core.layer_semantics import apply_layer_role_overrides
-from core.layer_stack import build_stacked_preview_assembly
+from core.layer_stack import build_stacked_preview_assembly, layer_sort_key
 from core.semantic import (
     MANUAL_REVIEW_KIND_OPTIONS,
     SemanticClassificationResult,
@@ -41,6 +41,7 @@ from services import LayerSemanticPresetStore, ProjectDocument
 from .import_worker import ImportWorker
 from .layer_config_dialog import LayerConfigDialog
 from .layer_semantic_preset_dialog import LayerSemanticPresetDialog
+from .stack_preview_worker import StackPreviewWorker
 from .widgets import DXFPreviewView, LayerManagerPanel, ModelPreviewPanel, SemanticObjectsPanel
 
 
@@ -56,7 +57,13 @@ class MainWindow(QMainWindow):
         self.layer_semantic_store = LayerSemanticPresetStore()
         self._import_thread: QThread | None = None
         self._import_worker: ImportWorker | None = None
+        self._stack_preview_thread: QThread | None = None
+        self._stack_preview_worker: StackPreviewWorker | None = None
         self._pending_import_config: dict[str, Any] | None = None
+        self._skip_next_walkthrough = False
+        self._layer_walkthrough_queue: list[str] = []
+        self._layer_walkthrough_index = -1
+        self._layer_walkthrough_active = False
 
         self.setWindowTitle("Auto-Bonding")
         self.setMinimumSize(1460, 900)
@@ -115,8 +122,10 @@ class MainWindow(QMainWindow):
         split.setSizes([820, 620])
 
         self.preview.file_drop_handler = self._load_document
+        self.preview.import_requested_handler = self._import_file
         self.preview.selection_changed_handler = self._handle_preview_selection
         self.preview.closed_shape_click_handler = self._configure_shape_thickness
+        self.model_preview.set_import_requested_handler(self._import_file)
         self.layer_panel.layer_visibility_changed.connect(self._handle_layer_visibility_changed)
         self.layer_panel.layer_selected.connect(self._handle_layer_selected)
         self.layer_panel.layer_thickness_requested.connect(self._edit_layer_thickness)
@@ -183,20 +192,28 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.export_button)
         return top
 
-    def _build_icon_button(self, icon: QIcon, tooltip: str, handler) -> QToolButton:
+    def _build_icon_button(self, icon: QIcon, label: str, handler) -> QToolButton:
         button = QToolButton()
+        button.setObjectName("TopBarButton")
         button.setIcon(icon)
-        button.setIconSize(QSize(20, 20))
-        button.setToolTip(tooltip)
+        button.setText(label)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setIconSize(QSize(18, 18))
+        button.setToolTip(label)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setAutoRaise(False)
         button.clicked.connect(handler)
         return button
 
-    def _build_menu_button(self, icon: QIcon, tooltip: str) -> QToolButton:
+    def _build_menu_button(self, icon: QIcon, label: str) -> QToolButton:
         button = QToolButton()
+        button.setObjectName("TopBarButton")
         button.setIcon(icon)
-        button.setIconSize(QSize(20, 20))
-        button.setToolTip(tooltip)
+        button.setText(label)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setIconSize(QSize(18, 18))
+        button.setToolTip(label)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
 
         menu = QMenu(button)
@@ -264,20 +281,73 @@ class MainWindow(QMainWindow):
                 border: 2px dashed #4A4A4A;
                 border-radius: 10px;
             }
-            QToolButton {
+            #TopBarButton {
                 background: #242424;
                 border: 1px solid #343434;
                 border-radius: 8px;
-                padding: 8px;
+                padding: 8px 12px;
+                font-weight: 600;
             }
-            QToolButton:hover { background: #2E2E2E; }
-            QToolButton:disabled {
+            #TopBarButton:hover { background: #2E2E2E; }
+            #TopBarButton:disabled {
                 background: #1F1F1F;
                 border-color: #2B2B2B;
             }
-            QToolButton::menu-indicator {
-                image: none;
-                width: 0px;
+            #SecondaryButton {
+                background: #202020;
+                border: 1px solid #303030;
+                border-radius: 8px;
+                padding: 6px 10px;
+                color: #D0D0D0;
+            }
+            #SecondaryButton:hover { background: #282828; }
+            #SectionBadge {
+                background: #2A2A2A;
+                color: #D6D6D6;
+                border: 1px solid #353535;
+                border-radius: 999px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            #ViewerStatus {
+                background: #2A2A2A;
+                color: #D6D6D6;
+                border: 1px solid #353535;
+                border-radius: 999px;
+                padding: 3px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            #ViewerStatus[tone="good"] {
+                background: #1E4D3A;
+                color: #E2F7EA;
+                border: 1px solid #2F7A5C;
+            }
+            #ViewerStatus[tone="warn"] {
+                background: #533A1D;
+                color: #FFE8C7;
+                border: 1px solid #7A5730;
+            }
+            #ViewerStatus[tone="busy"] {
+                background: #28374A;
+                color: #DEEAF9;
+                border: 1px solid #425B79;
+            }
+            #PlaceholderActionButton {
+                background: #D45B2E;
+                color: #FFFFFF;
+                border: 1px solid #E07A53;
+                border-radius: 8px;
+                padding: 8px 14px;
+                font-weight: 700;
+                min-width: 120px;
+            }
+            #PlaceholderActionButton:hover { background: #E06737; }
+            #PlaceholderActionButton:disabled {
+                background: #7C3B22;
+                color: #E6C8BC;
+                border-color: #8F4A2E;
             }
             QMenu {
                 background: #242424;
@@ -325,12 +395,13 @@ class MainWindow(QMainWindow):
             """
         )
 
-    def _config(self, *, layer_settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _config(self, *, layer_settings: dict[str, Any] | None = None, preview_only: bool = False) -> dict[str, Any]:
         config = {
             "mode": "standard",
             "default_wire_diameter": 0.025,
             "default_material": "gold",
             "export_format": "STEP",
+            "preview_only": preview_only,
         }
         if layer_settings is not None:
             config["enabled_layers"] = sorted(layer_settings.get("enabled_layers", []))
@@ -347,25 +418,33 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        self._load_document(Path(file_path))
+        self._load_document(Path(file_path), preview_only=True)
 
-    def _load_document(self, file_path: Path, *, layer_settings: dict[str, Any] | None = None) -> None:
+    def _load_document(
+        self,
+        file_path: Path,
+        *,
+        layer_settings: dict[str, Any] | None = None,
+        preview_only: bool = False,
+    ) -> None:
         if self._import_thread is not None:
             QMessageBox.information(self, "Import in progress", "Please wait for the current DXF import to finish.")
             return
 
-        self._pending_import_config = self._config(layer_settings=layer_settings)
+        self._pending_import_config = self._config(layer_settings=layer_settings, preview_only=preview_only)
         self.status_label.setText(f"Parsing {file_path.name}...")
         self.progress.setRange(0, 0)
         self.import_button.setEnabled(False)
         self.layers_button.setEnabled(False)
         self.export_button.setEnabled(False)
+        self._set_import_actions_enabled(False)
 
         self._import_thread = QThread(self)
         self._import_worker = ImportWorker(file_path, self._pending_import_config)
         self._import_worker.moveToThread(self._import_thread)
         self._import_thread.started.connect(self._import_worker.run)
         self._import_worker.preview_ready.connect(self._handle_import_preview)
+        self._import_worker.preview_complete.connect(self._finish_import_thread)
         self._import_worker.progress_ready.connect(self._handle_import_progress)
         self._import_worker.finished.connect(self._handle_import_success)
         self._import_worker.failed.connect(self._handle_import_failure)
@@ -407,7 +486,7 @@ class MainWindow(QMainWindow):
         ):
             return
 
-        self._load_document(self.document.path, layer_settings=payload)
+        self._load_document(self.document.path, layer_settings=payload, preview_only=True)
 
     def _open_semantic_preset_manager(self) -> None:
         dialog = LayerSemanticPresetDialog(self.layer_semantic_store.list_presets(), self)
@@ -511,14 +590,169 @@ class MainWindow(QMainWindow):
         if self.document is None:
             return
 
-        self.document.stack_preview_assembly = build_stacked_preview_assembly(
-            self.document.raw_entities,
-            self.document.layer_info,
-            self.document.entity_thicknesses,
-            layer_thicknesses=self.document.layer_thicknesses,
-            visible_layers=self.document.visible_layers,
+        if self._stack_preview_thread is not None:
+            return
+
+        self.document.stack_preview_layer_meshes = []
+        self.model_preview.surface.placeholder.set_content("3D Preview", "Updating stacked preview")
+        self.model_preview.surface.placeholder.set_action(None)
+        self.model_preview.surface._stack.setCurrentWidget(self.model_preview.surface._placeholder_page)
+
+        self._stack_preview_thread = QThread(self)
+        self._stack_preview_worker = StackPreviewWorker(
+            list(self.document.raw_entities),
+            list(self.document.layer_info),
+            dict(self.document.entity_thicknesses),
+            dict(self.document.layer_thicknesses),
+            set(self.document.visible_layers),
+            dict(self.document.layer_colors),
         )
+        self._stack_preview_worker.moveToThread(self._stack_preview_thread)
+        self._stack_preview_thread.started.connect(self._stack_preview_worker.run)
+        self._stack_preview_worker.finished.connect(self._handle_stack_preview_ready)
+        self._stack_preview_worker.failed.connect(self._handle_stack_preview_failed)
+        self._stack_preview_worker.finished.connect(self._finish_stack_preview_thread)
+        self._stack_preview_worker.failed.connect(self._finish_stack_preview_thread)
+        self._stack_preview_thread.start()
+
+    def _handle_stack_preview_ready(self, assembly: object, layer_meshes: object) -> None:
+        if self.document is None:
+            return
+
+        self.document.stack_preview_assembly = assembly
+        self.document.stack_preview_layer_meshes = list(layer_meshes) if isinstance(layer_meshes, list) else []
         self.model_preview.load_document(self.document)
+
+        if self._layer_walkthrough_active:
+            QTimer.singleShot(0, self._advance_layer_walkthrough)
+
+    def _handle_stack_preview_failed(self, error_message: str) -> None:
+        if self.document is None:
+            return
+
+        self.status_label.setText(f"{self.document.path.name} | stacked preview failed: {error_message}")
+        if self._layer_walkthrough_active:
+            QTimer.singleShot(0, self._advance_layer_walkthrough)
+
+    def _finish_stack_preview_thread(self, *_args: object) -> None:
+        if self._stack_preview_thread is not None:
+            self._stack_preview_thread.quit()
+            self._stack_preview_thread.wait()
+            self._stack_preview_thread.deleteLater()
+            self._stack_preview_thread = None
+
+        if self._stack_preview_worker is not None:
+            self._stack_preview_worker.deleteLater()
+            self._stack_preview_worker = None
+
+    def _ordered_active_layer_names(self) -> list[str]:
+        if self.document is None:
+            return []
+
+        return [
+            str(layer["name"])
+            for layer in sorted(self.document.layer_info, key=lambda item: layer_sort_key(str(item["name"])))
+            if layer.get("enabled", True) and layer.get("entity_count", 0) > 0
+        ]
+
+    def _start_layer_walkthrough(self) -> None:
+        if self.document is None:
+            return
+
+        ordered_layers = self._ordered_active_layer_names()
+        if not ordered_layers:
+            self._finish_layer_walkthrough()
+            return
+
+        self._layer_walkthrough_queue = ordered_layers
+        self._layer_walkthrough_index = -1
+        self._layer_walkthrough_active = True
+        self.layers_button.setEnabled(False)
+        QTimer.singleShot(0, self._advance_layer_walkthrough)
+
+    def _finish_layer_walkthrough(self) -> None:
+        should_start_final_build = (
+            self.document is not None
+            and self.document.assembly is None
+            and self._import_thread is None
+        )
+        next_path = self.document.path if self.document is not None else None
+        next_layer_settings = self._current_layer_settings() if self.document is not None else None
+
+        self._layer_walkthrough_queue = []
+        self._layer_walkthrough_index = -1
+        self._layer_walkthrough_active = False
+
+        if self.document is None:
+            return
+
+        visible_layers = self._default_visible_layers(self.document.layer_info)
+        if not visible_layers:
+            visible_layers = {
+                str(layer["name"])
+                for layer in self.document.layer_info
+                if layer.get("enabled", True)
+            }
+        self.document.visible_layers = visible_layers
+        self.document.selected_layer_name = None
+        self.preview.load_document(self.document)
+        self.layer_panel.load_document(self.document)
+        if self.document.stack_preview_assembly is not None:
+            self.model_preview.load_document(self.document)
+        self.layers_button.setEnabled(self._import_thread is None)
+
+        if should_start_final_build and next_path is not None and next_layer_settings is not None:
+            self._skip_next_walkthrough = True
+            self._load_document(next_path, layer_settings=next_layer_settings, preview_only=False)
+
+    def _advance_layer_walkthrough(self) -> None:
+        if not self._layer_walkthrough_active or self.document is None:
+            return
+
+        self._layer_walkthrough_index += 1
+        if self._layer_walkthrough_index >= len(self._layer_walkthrough_queue):
+            self._finish_layer_walkthrough()
+            self.status_label.setText(
+                f"{self.document.path.name} | layer thickness setup complete | generating 3D model..."
+            )
+            return
+
+        layer_name = self._layer_walkthrough_queue[self._layer_walkthrough_index]
+        self.document.visible_layers = set(self._layer_walkthrough_queue[: self._layer_walkthrough_index + 1])
+        self.document.selected_layer_name = layer_name
+        self.preview.load_document(self.document)
+        self.layer_panel.load_document(self.document)
+
+        current = float(self.document.layer_thicknesses.get(layer_name, 0.2))
+        thickness, accepted = QInputDialog.getDouble(
+            self,
+            "Set layer thickness",
+            (
+                f"Layer {self._layer_walkthrough_index + 1}/{len(self._layer_walkthrough_queue)}\n"
+                f"Set thickness for {layer_name}"
+            ),
+            current,
+            0.0,
+            50.0,
+            3,
+        )
+        if not accepted:
+            self._finish_layer_walkthrough()
+            self.status_label.setText(
+                f"{self.document.path.name} | layer setup canceled | generating 3D model..."
+            )
+            return
+
+        if thickness <= 0:
+            self.document.layer_thicknesses.pop(layer_name, None)
+        else:
+            self.document.layer_thicknesses[layer_name] = thickness
+
+        self._rebuild_stack_preview()
+        self.layer_panel.load_document(self.document)
+        self.status_label.setText(
+            f"{self.document.path.name} | layer {layer_name} -> {thickness:.3f} mm"
+        )
 
     def _handle_import_preview(self, file_path_str: str, preview: RawImportPreview) -> None:
         file_path = Path(file_path_str)
@@ -608,6 +842,11 @@ class MainWindow(QMainWindow):
             mesh_vertex_count=0,
             mesh_diagonal=1.0,
             stack_preview_assembly=previous_document.stack_preview_assembly if preserve_user_state and previous_document else None,
+            stack_preview_layer_meshes=(
+                list(previous_document.stack_preview_layer_meshes)
+                if preserve_user_state and previous_document
+                else []
+            ),
             status="preview-ready",
             note="2D preview ready. Building 3D model in background.",
         )
@@ -615,15 +854,24 @@ class MainWindow(QMainWindow):
         populated_layers = [
             layer for layer in self.document.layer_info if layer.get("enabled", True) and layer.get("entity_count", 0) > 0
         ]
-        self.status_label.setText(
-            f"{file_path.name} | {len(populated_layers)} active layers ready | generating 3D model..."
-        )
+        if self._skip_next_walkthrough:
+            self.status_label.setText(
+                f"{file_path.name} | {len(populated_layers)} active layers ready | generating 3D model..."
+            )
+        else:
+            self.status_label.setText(
+                f"{file_path.name} | {len(populated_layers)} active layers ready | configure thickness layer by layer"
+            )
         self.progress.setRange(0, 100)
         self.progress.setValue(35)
         self.preview.load_document(self.document)
         self.layer_panel.load_document(self.document)
         self.semantic_panel.load_document(self.document)
         self.model_preview.load_document(self.document)
+        if self._skip_next_walkthrough:
+            self._skip_next_walkthrough = False
+        else:
+            self._start_layer_walkthrough()
 
     def _handle_import_progress(self, file_path_str: str, progress_payload: dict[str, Any]) -> None:
         file_path = Path(file_path_str)
@@ -646,6 +894,7 @@ class MainWindow(QMainWindow):
             "3D Preview",
             f"Building layer {completed_layers}/{total_layers}",
         )
+        self.model_preview.surface.placeholder.set_action(None)
 
     def _handle_import_success(self, file_path_str: str, prepared: PreparedDocument) -> None:
         file_path = Path(file_path_str)
@@ -699,6 +948,7 @@ class MainWindow(QMainWindow):
             parser_elements=prepared["parser_elements"],
             converted_counts=prepared["converted_counts"],
             coordinates=prepared["coordinates"],
+            wire_geometries=prepared["wire_geometries"],
             layer_thicknesses=(
                 {
                     layer_name: thickness
@@ -725,6 +975,11 @@ class MainWindow(QMainWindow):
             mesh_vertex_count=int(prepared.get("mesh_vertex_count", 0)),
             mesh_diagonal=float(prepared.get("mesh_diagonal", 1.0)),
             stack_preview_assembly=previous_document.stack_preview_assembly if preserve_user_state and previous_document else None,
+            stack_preview_layer_meshes=(
+                list(previous_document.stack_preview_layer_meshes)
+                if preserve_user_state and previous_document
+                else []
+            ),
             status="ready",
             used_fallback=prepared["used_fallback"],
             note=prepared["note"],
@@ -741,6 +996,7 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self.import_button.setEnabled(True)
+        self.layers_button.setEnabled(not self._layer_walkthrough_active)
         self._update_ui()
 
     def _handle_import_failure(self, file_path_str: str, error_message: str) -> None:
@@ -768,6 +1024,9 @@ class MainWindow(QMainWindow):
             self._import_worker.deleteLater()
             self._import_worker = None
         self._pending_import_config = None
+        self._set_import_actions_enabled(True)
+        if not self._layer_walkthrough_active:
+            self.layers_button.setEnabled(self.document is not None)
 
     def closeEvent(self, event) -> None:  # pragma: no cover - GUI teardown path
         if self._import_worker is not None:
@@ -777,6 +1036,7 @@ class MainWindow(QMainWindow):
             except (RuntimeError, TypeError):
                 pass
         self._finish_import_thread()
+        self._finish_stack_preview_thread()
         self.model_preview.shutdown()
         super().closeEvent(event)
 
@@ -785,8 +1045,15 @@ class MainWindow(QMainWindow):
         self.layer_panel.load_document(self.document)
         self.semantic_panel.load_document(self.document)
         self.model_preview.load_document(self.document)
-        self.layers_button.setEnabled(self.document is not None and self._import_thread is None)
+        self._set_import_actions_enabled(self._import_thread is None)
+        self.layers_button.setEnabled(
+            self.document is not None and self._import_thread is None and not self._layer_walkthrough_active
+        )
         self.export_button.setEnabled(bool(self.document and self.document.assembly))
+
+    def _set_import_actions_enabled(self, enabled: bool) -> None:
+        self.preview.set_import_action_enabled(enabled)
+        self.model_preview.set_import_action_enabled(enabled)
 
     def _handle_preview_selection(self, entity_index: int | None) -> None:
         if self.document is None:

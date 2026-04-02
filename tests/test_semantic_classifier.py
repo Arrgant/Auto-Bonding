@@ -79,9 +79,15 @@ def test_classify_semantic_layers_promotes_core_rule_table_objects():
     review_kinds = {candidate.kind for candidate in result.review}
 
     assert "substrate" in entity_kinds
+    assert "hole" in entity_kinds
     assert "pad" in entity_kinds
     assert "wire" in entity_kinds
-    assert "hole_candidate" in review_kinds
+    assert "hole_candidate" not in review_kinds
+
+    hole_entities = [entity for entity in result.entities if entity.kind == "hole"]
+    assert len(hole_entities) == 1
+    assert hole_entities[0].properties["hole_kind"] == "tooling"
+    assert set(hole_entities[0].properties["edge_contacts"]) == {"left"}
 
 
 def test_classify_semantic_layers_marks_module_regions_with_left_right_sides():
@@ -377,3 +383,214 @@ def test_classify_semantic_layers_tracks_wire_polyline_consistency_and_die_edge_
     assert len(die_entities) == 1
     assert die_entities[0].properties["touches_module_edge"] is True
     assert "left" in die_entities[0].properties["module_edge_contacts"]
+
+
+def test_classify_semantic_layers_supports_explicit_hole_layers():
+    raw_entities = [
+        {"type": "CIRCLE", "center": (10.0, 10.0), "radius": 1.5, "layer": "07_mount_hole"},
+    ]
+    layer_info = [
+        {
+            "name": "07_mount_hole",
+            "color": 7,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": "hole",
+            "entity_count": 1,
+            "entity_types": {"CIRCLE": 1},
+        }
+    ]
+
+    result = classify_semantic_layers(raw_entities, layer_info)
+
+    hole_entities = [entity for entity in result.entities if entity.kind == "hole"]
+    assert len(hole_entities) == 1
+    assert hole_entities[0].properties["hole_kind"] == "layer_defined"
+
+
+def test_classify_semantic_layers_does_not_duplicate_explicit_hole_layers_inside_substrate():
+    raw_entities = [
+        {
+            "type": "LWPOLYLINE",
+            "points": [(0.0, 0.0), (40.0, 0.0), (40.0, 24.0), (0.0, 24.0)],
+            "closed": True,
+            "layer": "01_substrate",
+        },
+        {"type": "CIRCLE", "center": (4.0, 4.0), "radius": 1.0, "layer": "07_mount_hole"},
+    ]
+    layer_info = [
+        {
+            "name": "01_substrate",
+            "color": 7,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": "substrate",
+            "entity_count": 1,
+            "entity_types": {"LWPOLYLINE": 1},
+        },
+        {
+            "name": "07_mount_hole",
+            "color": 7,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": "hole",
+            "entity_count": 1,
+            "entity_types": {"CIRCLE": 1},
+        },
+    ]
+
+    result = classify_semantic_layers(raw_entities, layer_info)
+
+    hole_entities = [entity for entity in result.entities if entity.kind == "hole"]
+    assert len(hole_entities) == 1
+    assert hole_entities[0].layer_name == "07_mount_hole"
+
+
+def test_classify_semantic_layers_promotes_repeated_internal_substrate_circles_to_tooling_holes():
+    raw_entities = [
+        {
+            "type": "LWPOLYLINE",
+            "points": [(0.0, 0.0), (30.0, 0.0), (30.0, 18.0), (0.0, 18.0)],
+            "closed": True,
+            "layer": "01_substrate",
+        },
+        {"type": "CIRCLE", "center": (8.0, 9.0), "radius": 0.8, "layer": "01_substrate"},
+        {"type": "CIRCLE", "center": (22.0, 9.0), "radius": 0.8, "layer": "01_substrate"},
+    ]
+    layer_info = [
+        {
+            "name": "01_substrate",
+            "color": 7,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": "substrate",
+            "entity_count": 3,
+            "entity_types": {"LWPOLYLINE": 1, "CIRCLE": 2},
+        }
+    ]
+
+    result = classify_semantic_layers(raw_entities, layer_info)
+
+    hole_entities = [entity for entity in result.entities if entity.kind == "hole"]
+    assert len(hole_entities) == 2
+    assert all(entity.properties["hole_kind"] == "tooling" for entity in hole_entities)
+
+
+def test_classify_semantic_layers_promotes_lead_frame_circle_inside_substrate_to_hole():
+    raw_entities = [
+        {
+            "type": "LWPOLYLINE",
+            "points": [(0.0, 0.0), (24.0, 0.0), (24.0, 14.0), (0.0, 14.0)],
+            "closed": True,
+            "layer": "01_substrate",
+        },
+        {"type": "CIRCLE", "center": (2.0, 2.0), "radius": 0.6, "layer": "03_lead_frame"},
+    ]
+    layer_info = [
+        {
+            "name": "01_substrate",
+            "color": 7,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": "substrate",
+            "entity_count": 1,
+            "entity_types": {"LWPOLYLINE": 1},
+        },
+        {
+            "name": "03_lead_frame",
+            "color": 4,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": "lead_frame",
+            "suggested_role": "lead_frame",
+            "entity_count": 1,
+            "entity_types": {"CIRCLE": 1},
+        },
+    ]
+
+    result = classify_semantic_layers(raw_entities, layer_info)
+
+    hole_entities = [entity for entity in result.entities if entity.kind == "hole"]
+    assert len(hole_entities) == 1
+    assert hole_entities[0].layer_name == "03_lead_frame"
+    assert hole_entities[0].properties["hole_kind"] == "mounting"
+
+
+def test_classify_semantic_layers_keeps_concentric_rounds_as_round_features():
+    raw_entities = [
+        {
+            "type": "LWPOLYLINE",
+            "points": [(0.0, 0.0), (80.0, 0.0), (80.0, 50.0), (0.0, 50.0)],
+            "closed": True,
+            "layer": "01_substrate",
+        },
+        {"type": "CIRCLE", "center": (18.0, 18.0), "radius": 2.0, "layer": "03_lead_frame"},
+        {"type": "CIRCLE", "center": (18.0, 18.0), "radius": 4.0, "layer": "03_lead_frame"},
+    ]
+    layer_info = [
+        {
+            "name": "01_substrate",
+            "color": 7,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": "substrate",
+            "entity_count": 1,
+            "entity_types": {"LWPOLYLINE": 1},
+        },
+        {
+            "name": "03_lead_frame",
+            "color": 4,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": "lead_frame",
+            "suggested_role": "lead_frame",
+            "entity_count": 2,
+            "entity_types": {"CIRCLE": 2},
+        },
+    ]
+
+    result = classify_semantic_layers(raw_entities, layer_info)
+
+    hole_entities = [entity for entity in result.entities if entity.kind == "hole"]
+    round_entities = [entity for entity in result.entities if entity.kind == "round_feature"]
+    round_review = [candidate for candidate in result.review if candidate.kind == "round_feature_candidate"]
+    assert len(hole_entities) == 0
+    assert len(round_entities) + len(round_review) == 2

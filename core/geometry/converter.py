@@ -13,7 +13,9 @@ import numpy as np
 from .converter_helpers import (
     ConverterSettings,
     resolve_die_pad_spec,
+    resolve_hole_spec,
     resolve_lead_frame_spec,
+    resolve_substrate_spec,
     resolve_wire_element_spec,
 )
 
@@ -117,6 +119,27 @@ class BondingDiagramConverter:
         except Exception:
             return path
 
+    def create_substrate(
+        self,
+        *,
+        points: list[tuple[float, float]] | None,
+        center: tuple[float, float, float] | None,
+        radius: float | None,
+        thickness: float,
+    ) -> cq.Workplane:
+        if points:
+            profile = cq.Workplane("XY").polyline(points).close().extrude(thickness)
+            return profile
+        if center is not None and radius is not None and radius > 0:
+            return cq.Workplane("XY").center(center[0], center[1]).circle(radius).extrude(thickness)
+        return cq.Workplane("XY")
+
+    def create_hole_tool(self, center: tuple[float, float, float], radius: float, depth: float) -> cq.Workplane:
+        if radius <= 0 or depth <= 0:
+            return cq.Workplane("XY")
+        tool = cq.Workplane("XY").center(center[0], center[1]).circle(radius).extrude(depth * 2.0)
+        return tool.translate((0.0, 0.0, center[2] - depth * 0.5))
+
     def _append_element(self, assembly: cq.Assembly, element: BondingElement) -> None:
         if element.element_type == "wire":
             wire_spec = resolve_wire_element_spec(
@@ -138,7 +161,19 @@ class BondingDiagramConverter:
                 name=f"wire_{len(assembly.objects)}",
                 metadata={"layer": element.layer, "element_type": element.element_type},
             )
-        elif element.element_type == "die_pad":
+        elif element.element_type == "substrate":
+            substrate_spec = resolve_substrate_spec(element.geometry, element.properties)
+            assembly.add(
+                self.create_substrate(
+                    points=substrate_spec.points,
+                    center=substrate_spec.center,
+                    radius=substrate_spec.radius,
+                    thickness=substrate_spec.thickness,
+                ),
+                name=f"substrate_{len(assembly.objects)}",
+                metadata={"layer": element.layer, "element_type": element.element_type},
+            )
+        elif element.element_type in {"die_pad", "round_feature"}:
             pad_spec = resolve_die_pad_spec(element.geometry, element.properties)
             assembly.add(
                 self.create_die_pad(
@@ -150,7 +185,7 @@ class BondingDiagramConverter:
                     thickness=pad_spec.thickness,
                     radius=pad_spec.radius,
                 ),
-                name=f"die_pad_{len(assembly.objects)}",
+                name=f"{element.element_type}_{len(assembly.objects)}",
                 metadata={"layer": element.layer, "element_type": element.element_type},
             )
         elif element.element_type == "lead_frame":
@@ -168,7 +203,46 @@ class BondingDiagramConverter:
     def append_elements(self, assembly: cq.Assembly, elements: List[BondingElement]) -> cq.Assembly:
         """Append converted elements into an existing assembly."""
 
-        for element in elements:
+        substrates = [element for element in elements if element.element_type == "substrate"]
+        holes = [element for element in elements if element.element_type == "hole"]
+        others = [element for element in elements if element.element_type not in {"substrate", "hole"}]
+
+        hole_tools = []
+        for element in holes:
+            if not bool(element.properties.get("cut", False)):
+                continue
+            hole_spec = resolve_hole_spec(element.geometry, element.properties)
+            tool = self.create_hole_tool(hole_spec.center, hole_spec.radius, hole_spec.depth)
+            if tool.val() is not None:
+                hole_tools.append((element, tool))
+
+        for element in substrates:
+            substrate_spec = resolve_substrate_spec(element.geometry, element.properties)
+            solid = self.create_substrate(
+                points=substrate_spec.points,
+                center=substrate_spec.center,
+                radius=substrate_spec.radius,
+                thickness=substrate_spec.thickness,
+            )
+            substrate_bbox = solid.val().BoundingBox() if solid.val() is not None else None
+            if substrate_bbox is not None:
+                for hole_element, tool in hole_tools:
+                    hole_spec = resolve_hole_spec(hole_element.geometry, hole_element.properties)
+                    if (
+                        substrate_bbox.xmin <= hole_spec.center[0] <= substrate_bbox.xmax
+                        and substrate_bbox.ymin <= hole_spec.center[1] <= substrate_bbox.ymax
+                    ):
+                        try:
+                            solid = solid.cut(tool)
+                        except Exception:
+                            pass
+            assembly.add(
+                solid,
+                name=f"substrate_{len(assembly.objects)}",
+                metadata={"layer": element.layer, "element_type": element.element_type},
+            )
+
+        for element in others:
             self._append_element(assembly, element)
 
         return assembly

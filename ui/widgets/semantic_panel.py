@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from collections import defaultdict
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QFrame, QLabel, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QTabWidget,
+    QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+)
 
 from core.semantic import SemanticCandidate, SemanticEntity
 from services import ProjectDocument
@@ -37,18 +46,34 @@ class SemanticObjectsPanel(QFrame):
         title_layout.setContentsMargins(0, 0, 0, 0)
         title_layout.setSpacing(6)
 
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(6)
+
         title = QLabel("Objects")
         title.setObjectName("SectionTitle")
-        title_layout.addWidget(title)
+        top_row.addWidget(title)
+
+        self.object_badge = QLabel("0 found")
+        self.object_badge.setObjectName("SectionBadge")
+        top_row.addWidget(self.object_badge)
+
+        self.review_badge = QLabel("0 review")
+        self.review_badge.setObjectName("SectionBadge")
+        top_row.addWidget(self.review_badge)
+        top_row.addStretch(1)
 
         self.manage_presets_button = QToolButton(self)
-        self.manage_presets_button.setText("Manage Presets")
+        self.manage_presets_button.setObjectName("SecondaryButton")
+        self.manage_presets_button.setText("Presets")
+        self.manage_presets_button.setToolTip("Manage semantic presets")
         self.manage_presets_button.clicked.connect(self.preset_manage_requested.emit)
-        title_layout.addWidget(self.manage_presets_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        top_row.addWidget(self.manage_presets_button, alignment=Qt.AlignmentFlag.AlignRight)
+        title_layout.addLayout(top_row)
 
         layout.addWidget(title_row)
 
-        self.summary = QLabel("Import DXF to inspect recognized objects.")
+        self.summary = QLabel("Import a DXF to inspect recognized objects.")
         self.summary.setObjectName("MutedLabel")
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
@@ -71,7 +96,9 @@ class SemanticObjectsPanel(QFrame):
 
         if document is None or document.semantic_result is None:
             self.tabs.setEnabled(False)
-            self.summary.setText("Import DXF to inspect recognized objects.")
+            self.object_badge.setText("0 found")
+            self.review_badge.setText("0 review")
+            self.summary.setText("Import a DXF to inspect recognized objects.")
             self.tabs.setTabText(0, "Objects")
             self.tabs.setTabText(1, "Confirm")
             self._syncing = False
@@ -79,9 +106,19 @@ class SemanticObjectsPanel(QFrame):
 
         result = document.semantic_result
         self.tabs.setEnabled(True)
-        self.summary.setText(
-            f"{len(result.entities)} objects recognized. {len(result.review)} items may still need confirmation."
-        )
+        self.object_badge.setText(f"{len(result.entities)} found")
+        self.review_badge.setText(f"{len(result.review)} review")
+        if result.review:
+            self.summary.setText(
+                f"{len(result.entities)} objects recognized. {len(result.review)} items need review. "
+                "Double-click a Confirm item to classify it."
+            )
+        elif result.entities:
+            self.summary.setText(
+                f"{len(result.entities)} objects recognized. Select one to highlight it in the 2D preview."
+            )
+        else:
+            self.summary.setText("Recognized objects will appear here after import.")
         self.tabs.setTabText(0, f"Objects ({len(result.entities)})")
         self.tabs.setTabText(1, f"Confirm ({len(result.review)})")
 
@@ -115,6 +152,7 @@ class SemanticObjectsPanel(QFrame):
         tree = QTreeWidget(self)
         tree.setColumnCount(2)
         tree.setHeaderLabels(["Object", "Layer"])
+        tree.setAlternatingRowColors(True)
         tree.setRootIsDecorated(True)
         tree.setUniformRowHeights(True)
         tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
@@ -212,6 +250,10 @@ class SemanticObjectsPanel(QFrame):
         shape = semantic_item.properties.get("shape")
         if isinstance(shape, str) and shape and shape.title() not in details:
             details.append(shape.lower())
+
+        hole_kind = semantic_item.properties.get("hole_kind")
+        if isinstance(hole_kind, str) and hole_kind:
+            details.append(hole_kind.replace("_", " ").lower())
 
         if details:
             return f"{label} ({', '.join(details)})"

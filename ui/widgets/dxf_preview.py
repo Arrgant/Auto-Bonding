@@ -39,6 +39,7 @@ class DXFPreviewView(QGraphicsView):
         self._layer_colors: dict[str, str] = {}
 
         self.file_drop_handler: Callable[[Path], None] | None = None
+        self.import_requested_handler: Callable[[], None] | None = None
         self.selection_changed_handler: Callable[[int | None], None] | None = None
         self.closed_shape_click_handler: Callable[[int], None] | None = None
 
@@ -48,12 +49,18 @@ class DXFPreviewView(QGraphicsView):
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
 
-        self.placeholder = ViewerPlaceholder("2D Preview", "Import DXF", "dxf", self.viewport())
-        self.placeholder.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.placeholder = ViewerPlaceholder(
+            "2D Preview",
+            "Import a DXF or drop it here.",
+            "dxf",
+            self.viewport(),
+            action_text="Import DXF",
+        )
         self.placeholder.setAcceptDrops(True)
         self.placeholder.hide()
         self.viewport().installEventFilter(self)
         self.placeholder.installEventFilter(self)
+        self.placeholder.action_requested.connect(self._handle_import_requested)
         self._scene.selectionChanged.connect(self._handle_selection_changed)
 
     def load_document(self, document: ProjectDocument | None) -> None:
@@ -62,7 +69,8 @@ class DXFPreviewView(QGraphicsView):
         self._has_content = False
 
         if document is None or not document.raw_entities:
-            self.placeholder.set_content("2D Preview", "Import DXF")
+            self.placeholder.set_content("2D Preview", "Import a DXF or drop it here.")
+            self.placeholder.set_action("Import DXF")
             self._scene.setSceneRect(self._scene_rect)
             self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
             self.placeholder.show()
@@ -95,7 +103,8 @@ class DXFPreviewView(QGraphicsView):
         self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
         self._has_content = rendered_count > 0
         if rendered_count <= 0:
-            self.placeholder.set_content("2D Preview", "All layers hidden")
+            self.placeholder.set_content("2D Preview", "All layers are hidden. Re-enable one from Layers.")
+            self.placeholder.set_action(None)
             self.placeholder.show()
             self._position_placeholder()
             return
@@ -152,6 +161,11 @@ class DXFPreviewView(QGraphicsView):
         y_pos = (self.viewport().height() - self.placeholder.height()) // 2
         self.placeholder.move(max(0, x_pos), max(0, y_pos))
 
+    def set_import_action_enabled(self, enabled: bool) -> None:
+        if not self.placeholder.action_button.isVisible():
+            return
+        self.placeholder.set_action(self.placeholder.action_button.text(), enabled=enabled)
+
     def dragEnterEvent(self, event) -> None:  # pragma: no cover
         if self._extract_dxf_paths(event.mimeData()):
             event.acceptProposedAction()
@@ -188,6 +202,10 @@ class DXFPreviewView(QGraphicsView):
                         self.file_drop_handler(paths[0])
                     return True
         return super().eventFilter(watched, event)
+
+    def _handle_import_requested(self) -> None:
+        if self.import_requested_handler is not None:
+            self.import_requested_handler()
 
     def _extract_dxf_paths(self, mime_data) -> list[Path]:
         if not mime_data or not mime_data.hasUrls():

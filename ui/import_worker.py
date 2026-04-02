@@ -20,6 +20,7 @@ class ImportWorker(QObject):
     """Run staged DXF import and conversion work away from the UI thread."""
 
     preview_ready = Signal(str, object)
+    preview_complete = Signal(str)
     progress_ready = Signal(str, object)
     finished = Signal(str, object)
     failed = Signal(str, str)
@@ -40,6 +41,9 @@ class ImportWorker(QObject):
                 layer_mapping=layer_mapping,
             )
             self.preview_ready.emit(str(self._file_path), preview)
+            if bool(self._config.get("preview_only")):
+                self.preview_complete.emit(str(self._file_path))
+                return
             elements, used_fallback = resolve_preview_elements(preview, self._config)
             converter = BondingDiagramConverter(self._config)
             layer_groups = group_elements_by_layer(elements)

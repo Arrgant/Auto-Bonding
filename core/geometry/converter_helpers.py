@@ -92,6 +92,25 @@ class LeadFrameSpec:
     thickness: float
 
 
+@dataclass(frozen=True)
+class SubstrateSpec:
+    """Normalized substrate conversion inputs."""
+
+    points: list[tuple[float, float]] | None
+    center: tuple[float, float, float] | None
+    radius: float | None
+    thickness: float
+
+
+@dataclass(frozen=True)
+class HoleSpec:
+    """Normalized hole conversion inputs."""
+
+    center: tuple[float, float, float]
+    radius: float
+    depth: float
+
+
 def resolve_wire_element_spec(
     geometry: dict[str, Any],
     properties: dict[str, Any],
@@ -147,12 +166,58 @@ def resolve_lead_frame_spec(geometry: dict[str, Any], properties: dict[str, Any]
     )
 
 
+def resolve_substrate_spec(geometry: dict[str, Any], properties: dict[str, Any]) -> SubstrateSpec:
+    """Resolve substrate geometry into a stable profile spec."""
+
+    points = geometry.get("points")
+    normalized_points = None
+    if points:
+        normalized_points = [(float(point[0]), float(point[1])) for point in points]
+
+    center = geometry.get("center")
+    normalized_center = None
+    if center is not None:
+        normalized_center = (
+            float(center[0]),
+            float(center[1]),
+            float(center[2] if len(center) > 2 else 0.0),
+        )
+
+    radius = geometry.get("radius")
+    return SubstrateSpec(
+        points=normalized_points,
+        center=normalized_center,
+        radius=float(radius) if radius is not None else None,
+        thickness=float(properties.get("thickness", 0.3)),
+    )
+
+
+def resolve_hole_spec(geometry: dict[str, Any], properties: dict[str, Any]) -> HoleSpec:
+    """Resolve hole geometry into a cutting tool spec."""
+
+    center = geometry.get("center", [0.0, 0.0, 0.0])
+    radius = float(geometry.get("radius", properties.get("radius", 0.0)))
+    return HoleSpec(
+        center=(
+            float(center[0]),
+            float(center[1]),
+            float(center[2] if len(center) > 2 else 0.0),
+        ),
+        radius=radius,
+        depth=float(properties.get("depth", 0.3)),
+    )
+
+
 __all__ = [
     "ConverterSettings",
     "DiePadSpec",
+    "HoleSpec",
     "LeadFrameSpec",
+    "SubstrateSpec",
     "WireElementSpec",
     "resolve_die_pad_spec",
+    "resolve_hole_spec",
     "resolve_lead_frame_spec",
+    "resolve_substrate_spec",
     "resolve_wire_element_spec",
 ]

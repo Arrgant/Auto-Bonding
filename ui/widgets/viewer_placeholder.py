@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QWidget
 
 
 class ViewerPlaceholder(QWidget):
     """Centered placeholder used by empty viewer states."""
 
-    def __init__(self, title: str, caption: str, icon_kind: str, parent: QWidget | None = None):
+    action_requested = Signal()
+
+    def __init__(
+        self,
+        title: str,
+        caption: str,
+        icon_kind: str,
+        parent: QWidget | None = None,
+        *,
+        action_text: str | None = None,
+    ):
         super().__init__(parent)
-        self.setFixedSize(220, 170)
+        self.setFixedSize(240, 210)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         layout = QVBoxLayout(self)
@@ -41,14 +51,29 @@ class ViewerPlaceholder(QWidget):
         self.caption_label = QLabel(caption)
         self.caption_label.setObjectName("MutedLabel")
         self.caption_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.caption_label.setWordWrap(True)
+
+        self.action_button = QPushButton(self)
+        self.action_button.setObjectName("PlaceholderActionButton")
+        self.action_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.action_button.clicked.connect(lambda: self.action_requested.emit())
 
         layout.addWidget(box, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.title_label, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.caption_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.action_button, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.set_action(action_text)
 
     def set_content(self, title: str, caption: str) -> None:
         self.title_label.setText(title)
         self.caption_label.setText(caption)
+
+    def set_action(self, text: str | None, *, enabled: bool = True) -> None:
+        has_action = bool(text)
+        self.action_button.setVisible(has_action)
+        self.action_button.setEnabled(enabled and has_action)
+        self.action_button.setText("" if text is None else text)
 
     def _make_icon(self, icon_kind: str) -> QPixmap:
         pixmap = QPixmap(34, 34)

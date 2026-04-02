@@ -35,12 +35,14 @@ def test_prepare_document_returns_complete_payload(tmp_path):
         "elements",
         "converted_counts",
         "coordinates",
+        "wire_geometries",
         "drc_report",
         "assembly",
         "used_fallback",
         "note",
     }
     assert payload["raw_counts"]["LINE"] == 1
+    assert len(payload["wire_geometries"]) == 1
     assert payload["drc_report"]["passed"] in {True, False}
 
 
@@ -67,6 +69,7 @@ def test_preview_stage_can_be_promoted_to_prepared_document(tmp_path):
     assert payload["raw_entities"] == preview["raw_entities"]
     assert payload["scene_rect"] == preview["scene_rect"]
     assert payload["semantic_result"] == preview["semantic_result"]
+    assert payload["wire_geometries"] == preview["wire_geometries"]
 
 
 def test_group_elements_by_layer_uses_numeric_first_sort():

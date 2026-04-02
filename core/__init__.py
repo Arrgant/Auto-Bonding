@@ -1,6 +1,9 @@
 """Core domain and conversion pipeline for Auto-Bonding."""
 
 from .export.coordinates import BondPoint, CoordinateExporter
+from .export.wire_extraction import extract_wire_geometries
+from .export.wire_models import OrderedWireRecord, WireGeometry, WireOrderingConfig, WirePoint
+from .export.wire_ordering import order_wire_geometries
 from .geometry.converter import BondingDiagramConverter, BondingElement, WireLoop
 from .parsing.dxf import DXFParser
 from .pipeline import (
@@ -52,7 +55,11 @@ __all__ = [
     "SemanticCandidate",
     "SemanticClassificationResult",
     "SemanticEntity",
+    "OrderedWireRecord",
+    "WireGeometry",
     "WireLoop",
+    "WireOrderingConfig",
+    "WirePoint",
     "WireType",
     "build_conversion_artifacts",
     "build_drc_report",
@@ -60,7 +67,9 @@ __all__ = [
     "infer_elements_from_raw_entities",
     "load_import_preview",
     "load_raw_dxf_entities",
+    "order_wire_geometries",
     "prepare_document",
     "prepare_document_from_preview",
     "classify_semantic_layers",
+    "extract_wire_geometries",
 ]

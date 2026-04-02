@@ -77,6 +77,40 @@ def test_semantic_panel_groups_objects_and_review_items():
     panel.deleteLater()
 
 
+def test_semantic_panel_displays_hole_kind_details():
+    _app()
+    panel = SemanticObjectsPanel()
+    document = ProjectDocument(
+        path=Path("semantic_hole.dxf"),
+        size_bytes=0,
+        raw_entities=[],
+        scene_rect=(0.0, 0.0, 10.0, 10.0),
+        raw_counts=Counter(),
+        semantic_result=SemanticClassificationResult(
+            candidates=[],
+            entities=[
+                SemanticEntity(
+                    id="hole_1",
+                    kind="hole",
+                    layer_name="01_substrate",
+                    confidence=0.91,
+                    source_indices=(1,),
+                    properties={"hole_kind": "mounting"},
+                )
+            ],
+            review=[],
+            relation_notes=[],
+        ),
+        selected_semantic_key="entity:hole_1",
+    )
+
+    panel.load_document(document)
+
+    assert panel.object_tree.currentItem().text(0) == "Hole (mounting)"
+
+    panel.deleteLater()
+
+
 def test_semantic_panel_emits_review_override_request_on_double_click():
     _app()
     panel = SemanticObjectsPanel()

@@ -136,6 +136,67 @@ class TestBondingDiagramConverter:
         assert any(name.startswith("die_pad_") for name in object_names)
         assert any(name.startswith("wire_") for name in object_names)
 
+    def test_convert_elements_cuts_hole_from_substrate(self):
+        converter = BondingDiagramConverter()
+        elements = [
+            BondingElement(
+                element_type="substrate",
+                layer="01_substrate",
+                geometry={
+                    "points": [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 6.0, 0.0], [0.0, 6.0, 0.0]],
+                    "closed": True,
+                },
+                properties={"thickness": 0.3},
+            ),
+            BondingElement(
+                element_type="hole",
+                layer="01_substrate",
+                geometry={"center": [2.0, 2.0, 0.0], "radius": 0.5},
+                properties={"depth": 0.3, "cut": True},
+            ),
+        ]
+
+        assembly = converter.convert_elements(elements)
+        compound = assembly.toCompound()
+        solids = compound.Solids()
+
+        assert len(solids) == 1
+        volume = solids[0].Volume()
+        full_block_volume = 10.0 * 6.0 * 0.3
+        hole_volume = 3.141592653589793 * (0.5**2) * 0.3
+        assert volume == pytest.approx(full_block_volume - hole_volume, rel=0.08)
+
+    def test_convert_elements_keeps_round_feature_without_cutting_substrate(self):
+        converter = BondingDiagramConverter()
+        elements = [
+            BondingElement(
+                element_type="substrate",
+                layer="01_substrate",
+                geometry={
+                    "points": [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 6.0, 0.0], [0.0, 6.0, 0.0]],
+                    "closed": True,
+                },
+                properties={"thickness": 0.3},
+            ),
+            BondingElement(
+                element_type="round_feature",
+                layer="01_substrate",
+                geometry={"center": [2.0, 2.0, 0.0], "radius": 0.5},
+                properties={"thickness": 0.05},
+            ),
+        ]
+
+        assembly = converter.convert_elements(elements)
+        compound = assembly.toCompound()
+        solids = compound.Solids()
+
+        assert len(solids) == 2
+        volumes = sorted(solid.Volume() for solid in solids)
+        substrate_volume = 10.0 * 6.0 * 0.3
+        round_feature_volume = 3.141592653589793 * (0.5**2) * 0.05
+        assert volumes[1] == pytest.approx(substrate_volume, rel=0.05)
+        assert volumes[0] == pytest.approx(round_feature_volume, rel=0.08)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

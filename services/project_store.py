@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from core.export.coordinates import BondPoint
+from core.export.wire_models import WireGeometry
 from core.geometry.converter import BondingElement
 from core.pipeline_types import DRCReport, LayerMeshPayload
 from core.raw_dxf_types import LayerInfo, RawEntity, SceneRect
@@ -36,6 +37,7 @@ class ProjectDocument:
     parser_elements: list[BondingElement] = field(default_factory=list)
     converted_counts: Counter[str] = field(default_factory=Counter)
     coordinates: list[BondPoint] = field(default_factory=list)
+    wire_geometries: list[WireGeometry] = field(default_factory=list)
     layer_thicknesses: dict[str, float] = field(default_factory=dict)
     entity_thicknesses: dict[int, float] = field(default_factory=dict)
     selected_layer_name: str | None = None
@@ -56,6 +58,7 @@ class ProjectDocument:
     mesh_vertex_count: int = 0
     mesh_diagonal: float = 1.0
     stack_preview_assembly: Any | None = None
+    stack_preview_layer_meshes: list[LayerMeshPayload] = field(default_factory=list)
     output_path: Path | None = None
     status: str = "ready"
     used_fallback: bool = False

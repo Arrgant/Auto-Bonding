@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QFrame, QLabel, QTreeWidget, QTreeWidgetItem, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QTreeWidget, QTreeWidgetItem, QVBoxLayout
 
 from core.layer_semantics import format_layer_role
 from core.layer_stack import layer_sort_key
@@ -28,11 +28,25 @@ class LayerManagerPanel(QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(6)
+
         title = QLabel("Layers")
         title.setObjectName("SectionTitle")
-        layout.addWidget(title)
+        title_row.addWidget(title)
 
-        self.summary = QLabel("Import DXF to manage layers.")
+        self.active_badge = QLabel("Idle")
+        self.active_badge.setObjectName("SectionBadge")
+        title_row.addWidget(self.active_badge)
+
+        self.visible_badge = QLabel("0 shown")
+        self.visible_badge.setObjectName("SectionBadge")
+        title_row.addWidget(self.visible_badge)
+        title_row.addStretch(1)
+        layout.addLayout(title_row)
+
+        self.summary = QLabel("Import a DXF to inspect layers.")
         self.summary.setObjectName("MutedLabel")
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
@@ -40,6 +54,7 @@ class LayerManagerPanel(QFrame):
         self.tree = QTreeWidget(self)
         self.tree.setColumnCount(4)
         self.tree.setHeaderLabels(["On", "Layer", "Role", "Thk"])
+        self.tree.setAlternatingRowColors(True)
         self.tree.setRootIsDecorated(False)
         self.tree.setUniformRowHeights(True)
         self.tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
@@ -59,7 +74,9 @@ class LayerManagerPanel(QFrame):
 
         if document is None:
             self.tree.setEnabled(False)
-            self.summary.setText("Import DXF to manage layers.")
+            self.active_badge.setText("Idle")
+            self.visible_badge.setText("0 shown")
+            self.summary.setText("Import a DXF to inspect layers.")
             self._syncing = False
             return
 
@@ -72,11 +89,17 @@ class LayerManagerPanel(QFrame):
 
         self.tree.setEnabled(bool(active_layers))
         if not active_layers:
+            self.active_badge.setText("0 active")
+            self.visible_badge.setText("0 shown")
             self.summary.setText("No active layers in the current import.")
             self._syncing = False
             return
 
-        self.summary.setText("Toggle preview visibility. Double-click a row to edit its layer thickness.")
+        active_names = {str(layer["name"]) for layer in active_layers}
+        visible_count = len(active_names & visible_layers)
+        self.active_badge.setText(f"{len(active_layers)} active")
+        self.visible_badge.setText(f"{visible_count} shown")
+        self.summary.setText("Click to focus a layer. Double-click a row to set thickness.")
         selected_item: QTreeWidgetItem | None = None
 
         for layer in active_layers:

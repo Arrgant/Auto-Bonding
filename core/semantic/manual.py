@@ -9,6 +9,7 @@ from .entities import SemanticEntity
 
 MANUAL_REVIEW_KIND_OPTIONS = (
     "substrate",
+    "hole",
     "module_region",
     "lead_frame",
     "pad",

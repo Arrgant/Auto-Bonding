@@ -7,6 +7,8 @@ import re
 
 SEMANTIC_ROLE_LABELS: dict[str, str] = {
     "substrate": "Substrate",
+    "hole": "Hole",
+    "round_feature": "Round Feature",
     "module_region": "Module Region",
     "lead_frame": "Lead Frame",
     "pad": "Pad",
@@ -29,11 +31,49 @@ RECOMMENDED_LAYER_ROLE_MAP: dict[str, str] = {
 # These aliases keep the exact recommended names useful in the existing import
 # pipeline without over-promising unsupported behavior.
 RECOMMENDED_IMPORT_MAPPING: dict[str, str] = {
+    "01_SUBSTRATE": "substrate",
     "03_LEAD_FRAME": "lead_frame",
     "04_PAD": "die_pad",
     "05_DIE_REGION": "die_pad",
     "06_WIRE": "wire",
 }
+
+NUMERIC_LAYER_HINTS: dict[str, tuple[str, set[str]]] = {
+    "01": ("substrate", {"SUBSTRATE", "BOARD", "BASE", "CARRIER", "CORE"}),
+    "02": ("module_region", {"MODULE", "REGION", "MODULE_REGION", "MODULEAREA"}),
+    "03": ("lead_frame", {"LEAD", "FRAME", "LEADFRAME", "LF"}),
+    "04": ("pad", {"PAD", "PADS", "LAND", "ELECTRODE"}),
+    "05": ("die_region", {"DIE", "DIES", "CHIP", "CHIPS", "DIE_REGION", "CHIP_REGION"}),
+    "06": ("wire", {"WIRE", "WIRES", "WIREBOND", "BONDWIRE"}),
+}
+
+GENERIC_LAYER_HINTS: tuple[tuple[str, set[str]], ...] = (
+    ("substrate", {"SUBSTRATE", "BOARD", "BASE", "CARRIER", "CORE"}),
+    ("module_region", {"MODULE", "MODULES", "MODULE_REGION", "REGION"}),
+    ("lead_frame", {"LEADFRAME", "LEAD", "FRAME", "LF"}),
+    ("pad", {"PAD", "PADS", "LAND", "ELECTRODE"}),
+    ("die_region", {"DIE", "DIES", "CHIP", "CHIPS", "DIE_REGION", "CHIP_REGION"}),
+    ("wire", {"WIRE", "WIRES", "WIREBOND", "BONDWIRE"}),
+    (
+        "hole",
+        {
+            "HOLE",
+            "HOLES",
+            "MOUNT",
+            "MOUNTING",
+            "SCREW",
+            "DRILL",
+            "TOOL",
+            "TOOLING",
+            "SLOT",
+            "SLOTS",
+            "OBLONG",
+            "LONGHOLE",
+            "NPTH",
+            "PTH",
+        },
+    ),
+)
 
 
 def normalize_layer_name(layer_name: str) -> str:
@@ -55,6 +95,18 @@ def suggest_layer_semantic_role(layer_name: str) -> str | None:
 
     for prefix, role in RECOMMENDED_LAYER_ROLE_MAP.items():
         if normalized.startswith(prefix):
+            return role
+
+    tokens = [token for token in normalized.split("_") if token]
+    if tokens and tokens[0].isdigit():
+        numeric_hint = NUMERIC_LAYER_HINTS.get(tokens[0])
+        if numeric_hint is not None:
+            role, keywords = numeric_hint
+            if any(token in keywords for token in tokens[1:]):
+                return role
+
+    for role, keywords in GENERIC_LAYER_HINTS:
+        if any(token in keywords for token in tokens):
             return role
 
     return None

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .geometry.converter import BondingElement
+from .layer_semantics import suggest_layer_semantic_role
 from .raw_dxf_types import Point2D, RawArcEntity, RawCircleEntity, RawLWPolylineEntity, RawLineEntity
 
 
@@ -180,8 +181,30 @@ def infer_circle_entity(entity: RawCircleEntity) -> BondingElement:
     """Infer a circular die-pad from a raw CIRCLE entity."""
 
     center_x, center_y = entity["center"]
+    layer_name = entity.get("layer", "0")
+    semantic_role = suggest_layer_semantic_role(layer_name)
+    if semantic_role == "hole":
+        return BondingElement(
+            element_type="hole",
+            layer=layer_name,
+            geometry={
+                "center": [center_x, center_y, 0.0],
+                "radius": float(entity["radius"]),
+            },
+            properties={"depth": 0.3, "shape": "circle", "cut": True},
+        )
+    if semantic_role == "substrate":
+        return BondingElement(
+            element_type="round_feature",
+            layer=layer_name,
+            geometry={
+                "center": [center_x, center_y, 0.0],
+                "radius": float(entity["radius"]),
+            },
+            properties={"thickness": 0.05, "shape": "circle"},
+        )
     return build_circle_pad_element(
-        entity.get("layer", "0"),
+        layer_name,
         center_x,
         center_y,
         float(entity["radius"]),
@@ -200,6 +223,7 @@ def classify_polyline_entity(
         return None
 
     layer = entity.get("layer", "0")
+    semantic_role = suggest_layer_semantic_role(layer)
 
     if entity.get("closed") and len(points) >= 3:
         min_x, min_y, max_x, max_y = polyline_bbox(points)
@@ -211,6 +235,34 @@ def classify_polyline_entity(
         if circle_feature is not None:
             center_x, center_y, radius = circle_feature
             if radius >= config.min_round_radius:
+                if semantic_role == "hole":
+                    return (
+                        "round",
+                        radius,
+                        BondingElement(
+                            element_type="hole",
+                            layer=layer,
+                            geometry={
+                                "center": [center_x, center_y, 0.0],
+                                "radius": radius,
+                            },
+                            properties={"depth": 0.3, "shape": "circle", "cut": True},
+                        ),
+                    )
+                if semantic_role == "substrate":
+                    return (
+                        "round",
+                        radius,
+                        BondingElement(
+                            element_type="round_feature",
+                            layer=layer,
+                            geometry={
+                                "center": [center_x, center_y, 0.0],
+                                "radius": radius,
+                            },
+                            properties={"thickness": 0.05, "shape": "circle"},
+                        ),
+                    )
                 return (
                     "round",
                     radius,
@@ -218,6 +270,20 @@ def classify_polyline_entity(
                 )
 
         if area >= config.min_closed_area:
+            if semantic_role == "substrate":
+                return (
+                    "closed",
+                    area,
+                    BondingElement(
+                        element_type="substrate",
+                        layer=layer,
+                        geometry={
+                            "points": [[x_value, y_value, 0.0] for x_value, y_value in points],
+                            "closed": True,
+                        },
+                        properties={"thickness": 0.3, "shape": "profile"},
+                    ),
+                )
             return (
                 "closed",
                 area,

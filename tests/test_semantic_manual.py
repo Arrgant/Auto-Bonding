@@ -39,6 +39,29 @@ def test_apply_manual_semantic_overrides_promotes_review_candidate():
     assert manual_override_entity_key("substrate_candidate_7", "pad") == "entity:manual_pad_substrate_candidate_7"
 
 
+def test_apply_manual_semantic_overrides_supports_hole_kind():
+    result = SemanticClassificationResult(
+        candidates=[],
+        entities=[],
+        review=[
+            SemanticCandidate(
+                id="hole_candidate_3",
+                kind="hole_candidate",
+                layer_name="01_substrate",
+                confidence=0.73,
+                source_indices=(3,),
+            )
+        ],
+        relation_notes=[],
+    )
+
+    updated = apply_manual_semantic_overrides(result, {"hole_candidate_3": "hole"})
+
+    assert len(updated.review) == 0
+    assert len(updated.entities) == 1
+    assert updated.entities[0].kind == "hole"
+
+
 def test_apply_layer_role_overrides_replaces_suggested_role():
     layer_info = [
         {

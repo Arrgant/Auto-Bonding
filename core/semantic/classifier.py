@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import Iterable
 
+from ..hole_rules import classify_substrate_round_feature
 from ..layer_semantics import suggest_layer_semantic_role
 from ..raw_dxf_types import LayerInfo, Point2D, RawEntity
 from .candidates import SemanticCandidate
@@ -49,6 +50,7 @@ def classify_semantic_layers(
     candidates: list[SemanticCandidate] = []
 
     candidates.extend(_classify_substrate(raw_entities, layer_roles))
+    candidates.extend(_classify_holes(raw_entities, layer_roles))
     candidates.extend(_classify_module_regions(raw_entities, layer_roles))
     candidates.extend(_classify_lead_frames(raw_entities, layer_roles))
     candidates.extend(_classify_pads(raw_entities, layer_roles))
@@ -77,12 +79,12 @@ def _classify_substrate(raw_entities: list[RawEntity], layer_roles: dict[str, st
     ranked = sorted(closed, key=lambda item: _entity_area(item[1]), reverse=True)
     substrate_index, substrate_entity = ranked[0]
     substrate_bbox = _entity_bbox(substrate_entity)
-    holes = [
-        (index, entity)
-        for index, entity in ranked[1:]
-        if entity["type"] == "CIRCLE" and _bbox_inside(_entity_bbox(entity), substrate_bbox)
-    ]
-    confidence = bump_confidence(0.78, 0.08 if not ranked[1:] or _entity_area(substrate_entity) > _entity_area(ranked[1][1]) * 1.1 else 0.0, 0.06 if holes else 0.0)
+    holes = _substrate_internal_rounds(raw_entities, layer_roles, substrate_index, substrate_bbox)
+    confidence = bump_confidence(
+        0.78,
+        0.08 if not ranked[1:] or _entity_area(substrate_entity) > _entity_area(ranked[1][1]) * 1.1 else 0.0,
+        0.06 if holes else 0.0,
+    )
     candidates.append(
         SemanticCandidate(
             id=f"substrate_candidate_{substrate_index}",
@@ -99,19 +101,97 @@ def _classify_substrate(raw_entities: list[RawEntity], layer_roles: dict[str, st
         )
     )
 
+    repeated_counts = _round_feature_repeat_counts(holes)
+    concentric_counts = _concentric_round_counts(holes)
+
     for hole_order, (hole_index, hole_entity) in enumerate(holes, start=1):
+        hole_bbox = _entity_bbox(hole_entity)
+        hole_center = _entity_center(hole_entity)
+        hole_kind, edge_contacts = classify_substrate_round_feature(
+            hole_bbox,
+            substrate_bbox,
+            repeated_count=repeated_counts.get(hole_index, 1),
+            concentric_count=concentric_counts.get(hole_index, 1),
+        )
+        if hole_kind in {"mounting", "tooling"}:
+            hole_confidence = bump_confidence(0.86, 0.06, 0.02 if edge_contacts else 0.0)
+            candidates.append(
+                SemanticCandidate(
+                    id=f"hole_candidate_{hole_order}_{hole_index}",
+                    kind="hole_candidate",
+                    layer_name=str(hole_entity.get("layer", "0")),
+                    confidence=hole_confidence,
+                    source_indices=(hole_index,),
+                    geometry={"center": hole_center, "bbox": hole_bbox},
+                    properties={
+                        "parent": f"substrate_candidate_{substrate_index}",
+                        "hole_kind": hole_kind,
+                        "edge_contacts": edge_contacts,
+                    },
+                )
+            )
+            continue
+
         candidates.append(
             SemanticCandidate(
-                id=f"hole_candidate_{hole_order}_{hole_index}",
-                kind="hole_candidate",
+                id=f"round_feature_candidate_{hole_order}_{hole_index}",
+                kind="round_feature_candidate",
                 layer_name=str(hole_entity.get("layer", "0")),
-                confidence=0.72,
+                confidence=bump_confidence(0.84, 0.03 if edge_contacts else 0.0),
                 source_indices=(hole_index,),
-                geometry={"center": _entity_center(hole_entity), "bbox": _entity_bbox(hole_entity)},
-                properties={"parent": f"substrate_candidate_{substrate_index}"},
+                geometry={"center": hole_center, "bbox": hole_bbox},
+                properties={
+                    "parent": f"substrate_candidate_{substrate_index}",
+                    "feature_kind": "substrate_round",
+                    "edge_contacts": edge_contacts,
+                },
             )
         )
 
+    return candidates
+
+
+def _substrate_internal_rounds(
+    raw_entities: list[RawEntity],
+    layer_roles: dict[str, str | None],
+    substrate_index: int,
+    substrate_bbox: tuple[float, float, float, float],
+) -> list[tuple[int, RawEntity]]:
+    ignored_roles = {"pad", "die_region", "module_region", "wire", "hole", "bond_point"}
+    rounds: list[tuple[int, RawEntity]] = []
+    for index, entity in enumerate(raw_entities):
+        if index == substrate_index:
+            continue
+        role = layer_roles.get(str(entity.get("layer", "0")))
+        if role in ignored_roles:
+            continue
+        bbox = _entity_bbox(entity)
+        if not _bbox_inside(bbox, substrate_bbox):
+            continue
+        if _round_entity_diameter(entity) is None:
+            continue
+        rounds.append((index, entity))
+    return rounds
+
+
+def _classify_holes(raw_entities: list[RawEntity], layer_roles: dict[str, str | None]) -> list[SemanticCandidate]:
+    """Promote hole-like layers or circular contours into explicit hole semantics."""
+
+    candidates: list[SemanticCandidate] = []
+    for index, entity in _closed_entities_for_role(raw_entities, layer_roles, "hole"):
+        if not _is_circle_entity(entity):
+            continue
+        candidates.append(
+            SemanticCandidate(
+                id=f"hole_candidate_layer_{index}",
+                kind="hole_candidate",
+                layer_name=str(entity.get("layer", "0")),
+                confidence=0.88,
+                source_indices=(index,),
+                geometry={"center": _entity_center(entity), "bbox": _entity_bbox(entity)},
+                properties={"hole_kind": "layer_defined", "edge_contacts": tuple()},
+            )
+        )
     return candidates
 
 
@@ -379,6 +459,23 @@ def _entity_area(entity: RawEntity) -> float:
     return 0.0
 
 
+def _round_entity_diameter(entity: RawEntity) -> float | None:
+    if entity["type"] == "CIRCLE":
+        return float(entity["radius"]) * 2.0
+    if entity["type"] == "LWPOLYLINE" and entity.get("closed"):
+        bbox = _entity_bbox(entity)
+        width, height = _bbox_size(bbox)
+        if max(width, height, 1e-6) <= 0:
+            return None
+        if abs(width - height) / max(width, height, 1e-6) > 0.20:
+            return None
+        points = _entity_points(entity)
+        if len(points) < 8:
+            return None
+        return (width + height) / 2.0
+    return None
+
+
 def _bbox_size(bbox: tuple[float, float, float, float]) -> tuple[float, float]:
     min_x, min_y, max_x, max_y = bbox
     return abs(max_x - min_x), abs(max_y - min_y)
@@ -406,6 +503,47 @@ def _bbox_inside(inner: tuple[float, float, float, float], outer: tuple[float, f
         and inner[2] <= outer[2]
         and inner[3] <= outer[3]
     )
+
+
+def _round_feature_repeat_counts(
+    round_entities: list[tuple[int, RawEntity]],
+) -> dict[int, int]:
+    counts: dict[int, int] = {}
+    sizes = {
+        index: round(max(abs(_entity_bbox(entity)[2] - _entity_bbox(entity)[0]), abs(_entity_bbox(entity)[3] - _entity_bbox(entity)[1])), 3)
+        for index, entity in round_entities
+    }
+    for index, size in sizes.items():
+        counts[index] = sum(1 for other_size in sizes.values() if abs(other_size - size) <= max(size * 0.15, 0.2))
+    return counts
+
+
+def _concentric_round_counts(
+    round_entities: list[tuple[int, RawEntity]],
+) -> dict[int, int]:
+    counts: dict[int, int] = {}
+    profiles = {
+        index: {
+            "center": _entity_center(entity),
+            "diameter": _round_entity_diameter(entity),
+        }
+        for index, entity in round_entities
+    }
+    for index, profile in profiles.items():
+        diameter = profile["diameter"]
+        if diameter is None:
+            counts[index] = 1
+            continue
+        tolerance = max(diameter * 0.08, 0.15)
+        center_x, center_y = profile["center"]
+        counts[index] = sum(
+            1
+            for other in profiles.values()
+            if other["diameter"] is not None
+            and abs(center_x - other["center"][0]) <= tolerance
+            and abs(center_y - other["center"][1]) <= tolerance
+        )
+    return counts
 
 
 def _bbox_size_similarity(

@@ -9,6 +9,7 @@ from typing import Any
 import ezdxf
 
 from .export.coordinates import CoordinateExporter
+from .export.wire_extraction import extract_wire_geometries
 from .fallback import infer_elements_from_raw_entities
 from .geometry.converter import BondingDiagramConverter, BondingElement
 from .layer_stack import layer_sort_key
@@ -70,6 +71,7 @@ def load_import_preview(
     )
     parser_elements = parser.parse_document(document)
     semantic_result = classify_semantic_layers(raw_entities, layer_info)
+    wire_geometries = extract_wire_geometries(raw_entities, layer_info)
     return {
         "raw_entities": raw_entities,
         "scene_rect": scene_rect,
@@ -77,6 +79,7 @@ def load_import_preview(
         "layer_info": layer_info,
         "parser_elements": parser_elements,
         "semantic_result": semantic_result,
+        "wire_geometries": wire_geometries,
     }
 
 
@@ -117,6 +120,7 @@ def finalize_prepared_document(
     layer_info = preview["layer_info"]
     parser_elements = preview["parser_elements"]
     semantic_result = preview["semantic_result"]
+    wire_geometries = preview["wire_geometries"]
     exporter = CoordinateExporter()
 
     coordinates = exporter.extract_bond_points(assembly)
@@ -148,6 +152,7 @@ def finalize_prepared_document(
         "elements": elements,
         "converted_counts": Counter(element.element_type for element in elements),
         "coordinates": coordinates,
+        "wire_geometries": wire_geometries,
         "drc_report": drc_report,
         "assembly": assembly,
         "used_fallback": used_fallback,
