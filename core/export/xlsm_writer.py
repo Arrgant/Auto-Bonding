@@ -9,6 +9,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import xml.etree.ElementTree as ET
 
 from .wb1_writer import WB1Writer
+from .wb_sheet_codec import parse_wb1_content_to_rows, token_is_querytable_numeric
 from .wire_models import OrderedWireRecord
 from .wire_recipe_models import WireRecipeTemplate
 
@@ -243,24 +244,30 @@ def _populate_wb_worksheet(worksheet: ET.Element, wb1_content: str, *, start_row
     for row in preserved_rows:
         sheet_data.append(row)
 
-    lines = [line.rstrip("\r") for line in wb1_content.splitlines() if line.strip()]
+    wb_rows = parse_wb1_content_to_rows(wb1_content)
     max_fields = preserved_max_column
-    for offset, line in enumerate(lines):
+    for offset, fields in enumerate(wb_rows):
         row_index = start_row + offset
         row = ET.Element(_qn(MAIN_NS, "row"), {"r": str(row_index)})
-        fields = _split_wb1_tokens(line)
         max_fields = max(max_fields, len(fields))
         for column_index, value in enumerate(fields, start=1):
-            cell = ET.SubElement(
-                row,
-                _qn(MAIN_NS, "c"),
-                {
-                    "r": f"{_excel_column(column_index)}{row_index}",
-                    "t": "inlineStr",
-                },
-            )
-            inline_string = ET.SubElement(cell, _qn(MAIN_NS, "is"))
-            ET.SubElement(inline_string, _qn(MAIN_NS, "t")).text = value
+            cell_ref = f"{_excel_column(column_index)}{row_index}"
+            if value == "":
+                continue
+            if token_is_querytable_numeric(value):
+                cell = ET.SubElement(row, _qn(MAIN_NS, "c"), {"r": cell_ref})
+                ET.SubElement(cell, _qn(MAIN_NS, "v")).text = str(int(value))
+            else:
+                cell = ET.SubElement(
+                    row,
+                    _qn(MAIN_NS, "c"),
+                    {
+                        "r": cell_ref,
+                        "t": "inlineStr",
+                    },
+                )
+                inline_string = ET.SubElement(cell, _qn(MAIN_NS, "is"))
+                ET.SubElement(inline_string, _qn(MAIN_NS, "t")).text = value
         sheet_data.append(row)
 
     dimension = worksheet.find(_qn(MAIN_NS, "dimension"))
@@ -268,7 +275,7 @@ def _populate_wb_worksheet(worksheet: ET.Element, wb1_content: str, *, start_row
         dimension = ET.Element(_qn(MAIN_NS, "dimension"))
         worksheet.insert(0, dimension)
 
-    max_row = max([start_row + len(lines) - 1, *[int(row.attrib.get("r", "0")) for row in preserved_rows]], default=start_row)
+    max_row = max([start_row + len(wb_rows) - 1, *[int(row.attrib.get("r", "0")) for row in preserved_rows]], default=start_row)
     min_row = min([int(row.attrib.get("r", "0")) for row in sheet_data.findall(_qn(MAIN_NS, "row"))], default=start_row)
     dimension.set("ref", f"A{min_row}:{_excel_column(max_fields)}{max_row}")
 
@@ -416,10 +423,6 @@ def _format_number(value: float | int) -> str:
 
 def _xml_bytes(root: ET.Element) -> bytes:
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
-
-
-def _split_wb1_tokens(line: str) -> list[str]:
-    return [token for token in line.split(",") if token]
 
 
 def _set_cell_value(cell: ET.Element, value: object) -> None:
