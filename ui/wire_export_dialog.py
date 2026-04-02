@@ -51,6 +51,44 @@ class WireExportRequest:
     export_xlsm: bool
 
 
+RX2000_COMMON_PFILE_FIELDS = (
+    ("search_force", "Search Force"),
+    ("cut_force", "Cut Force"),
+    ("wait_time", "Wait Time"),
+    ("linear_time", "Linear Time"),
+    ("usual_low_speed_khz", "Usual Low Speed"),
+    ("usual_high_speed_khz", "Usual High Speed"),
+    ("loop_low_speed_khz", "Loop Low Speed"),
+    ("loop_high_speed_khz", "Loop High Speed"),
+    ("h1_cutter", "H1 Cutter"),
+    ("h2_cutter", "H2 Cutter"),
+)
+
+
+def merge_rx2000_common_pfile_fields(
+    pfile_named_defaults: dict[str, Any],
+    pfile_field_map: dict[str, str],
+    field_values: dict[str, float],
+    default_field_map: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Overlay common RX2000 form fields onto the template JSON payload."""
+
+    merged_named_defaults = dict(pfile_named_defaults)
+    merged_field_map = dict(pfile_field_map)
+    for field_name, value in field_values.items():
+        merged_named_defaults[field_name] = int(value) if float(value).is_integer() else value
+        if field_name not in merged_field_map and field_name in default_field_map:
+            merged_field_map[field_name] = default_field_map[field_name]
+    return merged_named_defaults, merged_field_map
+
+
+def _coerce_numeric_scalar(value: Any, fallback: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
 class WireExportDialog(QDialog):
     """Edit wire export templates and choose one export action."""
 
@@ -69,6 +107,10 @@ class WireExportDialog(QDialog):
         self.template_store = template_store
         self.output_directory = Path(output_directory)
         self._production_exporter = WireProductionExporter()
+        starter_template = build_rx2000_default_template()
+        self._rx2000_default_pfile_named = dict(starter_template.pfile_named_defaults)
+        self._rx2000_default_pfile_field_map = dict(starter_template.pfile_field_map)
+        self._rx2000_common_pfile_editors: dict[str, QSpinBox] = {}
         self._loading_template = False
         self._template_ids_by_index: list[str] = []
         self._current_template_id: str | None = None
@@ -132,6 +174,7 @@ class WireExportDialog(QDialog):
         body.addLayout(left_column, stretch=3)
 
         left_column.addWidget(self._build_general_group())
+        left_column.addWidget(self._build_common_pfile_group())
         left_column.addWidget(self._build_json_group(), stretch=1)
 
         right_column = QVBoxLayout()
@@ -304,6 +347,39 @@ class WireExportDialog(QDialog):
         )
         return group
 
+    def _build_common_pfile_group(self) -> QWidget:
+        group = QGroupBox("Common RX2000 PFILE")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        help_label = QLabel(
+            "These common RX2000 fields are easier to edit here. They are written back into "
+            "PFILE Named Defaults when you save the template."
+        )
+        help_label.setWordWrap(True)
+        help_label.setStyleSheet("color: #8E8E8E; font-size: 12px;")
+        layout.addWidget(help_label)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        layout.addLayout(grid)
+
+        for index, (field_name, label_text) in enumerate(RX2000_COMMON_PFILE_FIELDS):
+            row = index // 2
+            column_offset = (index % 2) * 2
+            label = QLabel(label_text)
+            editor = QSpinBox()
+            editor.setRange(0, 999999)
+            editor.valueChanged.connect(self._refresh_preview)
+            grid.addWidget(label, row, column_offset)
+            grid.addWidget(editor, row, column_offset + 1)
+            self._rx2000_common_pfile_editors[field_name] = editor
+
+        return group
+
     def _build_json_editor(self, parent_layout: QVBoxLayout, title: str, help_text: str) -> QPlainTextEdit:
         label = QLabel(title)
         parent_layout.addWidget(label)
@@ -438,6 +514,9 @@ class WireExportDialog(QDialog):
         self._set_combo_by_data(self.start_role_combo, template.ordering.start_role)
         self.group_no_spin.setValue(template.ordering.group_no)
         self.record_defaults_edit.setPlainText(self._to_json(template.record_defaults))
+        for field_name, editor in self._rx2000_common_pfile_editors.items():
+            default_value = self._rx2000_default_pfile_named.get(field_name, 0)
+            editor.setValue(int(round(_coerce_numeric_scalar(template.pfile_named_defaults.get(field_name, default_value)))))
         self.pfile_named_defaults_edit.setPlainText(self._to_json(template.pfile_named_defaults))
         self.pfile_field_map_edit.setPlainText(self._to_json(template.pfile_field_map))
         self.pfile_cell_overrides_edit.setPlainText(self._to_json(template.pfile_cell_overrides))
@@ -562,6 +641,15 @@ class WireExportDialog(QDialog):
         name = self.template_name_edit.text().strip() or "New Template"
         pfile_field_map = self._normalize_field_map(pfile_field_map)
         pfile_named_defaults = {str(key): value for key, value in pfile_named_defaults.items()}
+        pfile_named_defaults, pfile_field_map = merge_rx2000_common_pfile_fields(
+            pfile_named_defaults,
+            pfile_field_map,
+            {
+                field_name: float(editor.value())
+                for field_name, editor in self._rx2000_common_pfile_editors.items()
+            },
+            self._rx2000_default_pfile_field_map,
+        )
         try:
             field_map = {str(key): int(value) for key, value in wb1_field_map.items()}
             record_index_defaults = {int(key): value for key, value in wb1_record_defaults.items()}
