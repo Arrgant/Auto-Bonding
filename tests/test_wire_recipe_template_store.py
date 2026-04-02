@@ -20,6 +20,7 @@ def test_wire_recipe_template_store_round_trips_templates(tmp_path):
         ordering=WireOrderingConfig(primary_axis="y", group_no=3),
         header_defaults={"wire_size_code": 3},
         record_defaults={"search_speed": 9900},
+        role_record_defaults={"first": {"search_speed": 50}, "second": {"search_speed": 99}},
         wb1_field_map={"wire_seq": 1, "bond_x": 2},
         wb1_record_defaults={5: 100, 6: "00F0"},
         wb1_role_codes={"first": 0, "second": 2},
@@ -36,6 +37,8 @@ def test_wire_recipe_template_store_round_trips_templates(tmp_path):
     assert loaded.wb1_template_path == "C:/fixtures/sample.WB1"
     assert loaded.ordering.primary_axis == "y"
     assert loaded.ordering.group_no == 3
+    assert loaded.role_record_defaults["first"]["search_speed"] == 50
+    assert loaded.role_record_defaults["second"]["search_speed"] == 99
     assert loaded.wb1_field_map["bond_x"] == 2
     assert loaded.wb1_record_defaults[5] == 100
     assert loaded.wb1_record_defaults[6] == "00F0"
@@ -64,4 +67,10 @@ def test_wire_recipe_template_store_includes_builtin_rx2000_default(tmp_path):
     expected = build_rx2000_default_template()
     assert builtin is not None
     assert builtin.name == expected.name
+    assert builtin.coord_scale == 5.0
+    assert builtin.default_z == 1455.2
+    assert builtin.role_record_defaults["first"]["loop_setting"] == 55
+    assert builtin.role_record_defaults["second"]["loop_setting"] == 50
+    assert builtin.wb1_field_map["bond_x"] == 38
+    assert builtin.wb1_field_map["camera_z"] == 36
     assert builtin.wb1_field_map == expected.wb1_field_map

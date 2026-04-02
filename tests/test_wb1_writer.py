@@ -40,6 +40,10 @@ def test_wb1_writer_replaces_j_records_from_ordered_wires(tmp_path):
         },
         wb1_record_defaults={5: 4},
         record_defaults={"search_speed": 240},
+        role_record_defaults={
+            "first": {"search_speed": 50},
+            "second": {"search_speed": 99},
+        },
     )
 
     ordered_wires = [
@@ -58,8 +62,8 @@ def test_wb1_writer_replaces_j_records_from_ordered_wires(tmp_path):
 
     assert lines[0] == "0000,44454D4F2E5742310000,"
     assert lines[3] == "J,"
-    assert lines[4] == "0000,0001,000A,0014,0046,0004,00F0,"
-    assert lines[5] == "0002,0001,0023,002D,0046,0004,00F0,"
+    assert lines[4] == "0000,0001,000A,0014,0046,0004,0032,"
+    assert lines[5] == "0002,0001,0023,002D,0046,0004,0063,"
     assert lines[6] == "Q"
 
 
@@ -101,6 +105,128 @@ def test_wb1_writer_creates_records_when_template_j_section_is_empty(tmp_path):
     assert lines[2].startswith("0000,0001,0000")
     assert lines[3].startswith("0002,0002,0001")
     assert lines[4] == "Q"
+
+
+def test_wb1_writer_applies_rx2000_role_defaults_after_shared_defaults(tmp_path):
+    template_path = tmp_path / "rx-template.WB1"
+    template_path.write_text(
+        "\n".join(
+            [
+                "0000,52582E5742310000,",
+                "J,",
+                "0000,0000,0000,0000,0000,0000,0000,0000,0000,0000,0000,0000,",
+                "0002,0000,0000,0000,0000,0000,0000,0000,0000,0000,0000,0000,",
+                "Q",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    template = WireRecipeTemplate(
+        template_id="rx",
+        name="RX",
+        wb1_template_path=str(template_path),
+        coord_scale=5.0,
+        default_z=1455.2,
+        wb1_field_map={
+            "role_code": 0,
+            "loop_setting": 2,
+            "us_power_p": 9,
+            "us_power_l": 10,
+            "us_time_p": 11,
+            "search_speed": 13,
+            "bond_x": 38,
+            "bond_y": 40,
+            "bond_z": 42,
+        },
+        record_defaults={"us_power_l": 135},
+        role_record_defaults={
+            "first": {"loop_setting": 55, "us_power_p": 40, "us_time_p": 10, "search_speed": 50},
+            "second": {"loop_setting": 50, "us_power_p": 0, "us_time_p": 0, "search_speed": 99},
+        },
+        wb1_role_codes={"first": 0, "second": 2},
+    )
+
+    ordered_wires = [
+        OrderedWireRecord(
+            wire_id="W0003",
+            wire_seq=7,
+            group_no=1,
+            first_point_seq=13,
+            second_point_seq=14,
+            geometry=_wire_geometry("W0003", (1.0, 2.0), (3.0, 4.0)),
+        )
+    ]
+
+    lines = WB1Writer().render(ordered_wires, template, output_name="RX.WB1").splitlines()
+    first_record = [token for token in lines[2].split(",") if token]
+    second_record = [token for token in lines[3].split(",") if token]
+
+    assert first_record[2] == "0037"
+    assert first_record[9] == "0028"
+    assert first_record[10] == "0087"
+    assert first_record[11] == "000A"
+    assert first_record[13] == "0032"
+    assert second_record[2] == "0032"
+    assert second_record[9] == "0000"
+    assert second_record[10] == "0087"
+    assert second_record[11] == "0000"
+    assert second_record[13] == "0063"
+
+
+def test_wb1_writer_applies_role_specific_named_defaults(tmp_path):
+    template_path = tmp_path / "role-template.WB1"
+    template_path.write_text(
+        "\n".join(
+            [
+                "0000,524F4C452E5742310000,",
+                "J,",
+                "0000,0000,0000,0000,0000,0000,0000,",
+                "0002,0000,0000,0000,0000,0000,0000,",
+                "Q",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    template = WireRecipeTemplate(
+        template_id="role",
+        name="Role",
+        wb1_template_path=str(template_path),
+        coord_scale=5.0,
+        default_z=100.0,
+        wb1_field_map={
+            "role_code": 0,
+            "wire_seq": 1,
+            "search_speed": 2,
+            "pull_height": 3,
+            "bond_z": 4,
+            "contact_surface_position": 5,
+            "group_no": 6,
+        },
+        record_defaults={"pull_height": 20},
+        role_record_defaults={
+            "first": {"search_speed": 50, "contact_surface_position": 7316},
+            "second": {"search_speed": 99, "pull_height": 250, "contact_surface_position": 7331},
+        },
+    )
+
+    ordered_wires = [
+        OrderedWireRecord(
+            wire_id="W0100",
+            wire_seq=7,
+            group_no=3,
+            first_point_seq=13,
+            second_point_seq=14,
+            geometry=_wire_geometry("W0100", (1.0, 2.0), (3.0, 4.0)),
+        )
+    ]
+
+    content = WB1Writer().render(ordered_wires, template, output_name="ROLE.WB1")
+    lines = content.splitlines()
+
+    assert lines[2] == "0000,0007,0032,0014,01F4,1C94,0003,"
+    assert lines[3] == "0002,0007,0063,00FA,01F4,1CA3,0003,"
 
 
 def _wire_geometry(wire_id: str, first_xy: tuple[float, float], second_xy: tuple[float, float]) -> WireGeometry:

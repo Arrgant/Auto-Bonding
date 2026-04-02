@@ -25,6 +25,7 @@ class WireRecipeTemplate:
     ordering: WireOrderingConfig = field(default_factory=WireOrderingConfig)
     header_defaults: dict[str, TemplateScalar] = field(default_factory=dict)
     record_defaults: dict[str, TemplateScalar] = field(default_factory=dict)
+    role_record_defaults: dict[str, dict[str, TemplateScalar]] = field(default_factory=dict)
     wb1_field_map: dict[str, int] = field(default_factory=dict)
     wb1_record_defaults: dict[int, WB1RecordOverrideValue] = field(default_factory=dict)
     wb1_role_codes: dict[str, WB1RecordOverrideValue] = field(
@@ -51,6 +52,9 @@ class WireRecipeTemplate:
             },
             "header_defaults": dict(self.header_defaults),
             "record_defaults": dict(self.record_defaults),
+            "role_record_defaults": {
+                role: dict(values) for role, values in sorted(self.role_record_defaults.items())
+            },
             "wb1_field_map": dict(self.wb1_field_map),
             "wb1_record_defaults": {
                 str(index): value for index, value in sorted(self.wb1_record_defaults.items())
@@ -82,6 +86,7 @@ class WireRecipeTemplate:
             ordering=ordering,
             header_defaults=_coerce_scalar_mapping(payload.get("header_defaults")),
             record_defaults=_coerce_scalar_mapping(payload.get("record_defaults")),
+            role_record_defaults=_coerce_role_scalar_mapping(payload.get("role_record_defaults")),
             wb1_field_map=_coerce_int_mapping(payload.get("wb1_field_map")),
             wb1_record_defaults=_coerce_record_defaults(payload.get("wb1_record_defaults")),
             wb1_role_codes=_coerce_role_codes(payload.get("wb1_role_codes")),
@@ -118,6 +123,19 @@ def _coerce_int_mapping(value: object) -> dict[str, int]:
             coerced[key] = int(item)
         except (TypeError, ValueError):
             continue
+    return coerced
+
+
+def _coerce_role_scalar_mapping(value: object) -> dict[str, dict[str, TemplateScalar]]:
+    if not isinstance(value, dict):
+        return {}
+    coerced: dict[str, dict[str, TemplateScalar]] = {}
+    for role, item in value.items():
+        if not isinstance(role, str):
+            continue
+        nested = _coerce_scalar_mapping(item)
+        if nested:
+            coerced[role] = nested
     return coerced
 
 

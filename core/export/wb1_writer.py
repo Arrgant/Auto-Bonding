@@ -107,6 +107,8 @@ class WB1Writer:
             fields[index] = _encode_override_value(value)
         for field_name, value in template.record_defaults.items():
             _set_field(fields, field_map, field_name, value)
+        for field_name, value in template.role_record_defaults.get(role, {}).items():
+            _set_field(fields, field_map, field_name, value)
 
         _set_field(fields, field_map, "role_code", template.wb1_role_codes.get(role, 0))
         _set_field(fields, field_map, "wire_seq", ordered_record.wire_seq)

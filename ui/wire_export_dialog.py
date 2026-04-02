@@ -260,6 +260,11 @@ class WireExportDialog(QDialog):
             "Record Defaults",
             "Named non-coordinate defaults that match WB1 field names when available.",
         )
+        self.role_record_defaults_edit = self._build_json_editor(
+            layout,
+            "Role Record Defaults",
+            "Per-role named overrides, for example {\"first\": {...}, \"second\": {...}}.",
+        )
         self.header_defaults_edit = self._build_json_editor(
             layout,
             "Header Defaults",
@@ -416,6 +421,7 @@ class WireExportDialog(QDialog):
         self._set_combo_by_data(self.start_role_combo, template.ordering.start_role)
         self.group_no_spin.setValue(template.ordering.group_no)
         self.record_defaults_edit.setPlainText(self._to_json(template.record_defaults))
+        self.role_record_defaults_edit.setPlainText(self._to_json(template.role_record_defaults))
         self.header_defaults_edit.setPlainText(self._to_json(template.header_defaults))
         self.wb1_field_map_edit.setPlainText(self._to_json(template.wb1_field_map))
         self.wb1_record_defaults_edit.setPlainText(self._to_json(template.wb1_record_defaults))
@@ -493,6 +499,7 @@ class WireExportDialog(QDialog):
             ordering=template.ordering,
             header_defaults=template.header_defaults,
             record_defaults=template.record_defaults,
+            role_record_defaults=template.role_record_defaults,
             wb1_field_map=template.wb1_field_map,
             wb1_record_defaults=template.wb1_record_defaults,
             wb1_role_codes=template.wb1_role_codes,
@@ -501,6 +508,10 @@ class WireExportDialog(QDialog):
     def _collect_template(self, *, show_errors: bool) -> WireRecipeTemplate | None:
         try:
             record_defaults = self._parse_json_object(self.record_defaults_edit.toPlainText(), "Record Defaults")
+            role_record_defaults = self._parse_json_object(
+                self.role_record_defaults_edit.toPlainText(),
+                "Role Record Defaults",
+            )
             header_defaults = self._parse_json_object(self.header_defaults_edit.toPlainText(), "Header Defaults")
             wb1_field_map = self._parse_json_object(self.wb1_field_map_edit.toPlainText(), "WB1 Field Map")
             wb1_record_defaults = self._parse_json_object(
@@ -521,6 +532,12 @@ class WireExportDialog(QDialog):
             if show_errors:
                 QMessageBox.warning(self, "Template JSON", f"WB1 JSON contains a non-numeric field index: {exc}")
             return None
+        try:
+            role_named_defaults = self._normalize_role_record_defaults(role_record_defaults)
+        except ValueError as exc:
+            if show_errors:
+                QMessageBox.warning(self, "Template JSON", str(exc))
+            return None
 
         return WireRecipeTemplate(
             template_id=self._current_template_id or self._make_template_id(name),
@@ -539,6 +556,7 @@ class WireExportDialog(QDialog):
             ),
             header_defaults=header_defaults,
             record_defaults=record_defaults,
+            role_record_defaults=role_named_defaults,
             wb1_field_map=field_map,
             wb1_record_defaults=record_index_defaults,
             wb1_role_codes={str(key): value for key, value in wb1_role_codes.items()},
@@ -559,6 +577,14 @@ class WireExportDialog(QDialog):
     def _optional_path(self, text: str) -> str | None:
         stripped = text.strip()
         return stripped or None
+
+    def _normalize_role_record_defaults(self, payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        normalized: dict[str, dict[str, Any]] = {}
+        for role, values in payload.items():
+            if not isinstance(values, dict):
+                raise ValueError("Role Record Defaults must map each role name to a JSON object.")
+            normalized[str(role)] = {str(key): value for key, value in values.items()}
+        return normalized
 
     def _refresh_preview(self) -> None:
         if self._loading_template:
@@ -644,6 +670,9 @@ class WireExportDialog(QDialog):
             ordering=starter.ordering,
             header_defaults=dict(starter.header_defaults),
             record_defaults=dict(starter.record_defaults),
+            role_record_defaults={
+                role: dict(values) for role, values in starter.role_record_defaults.items()
+            },
             wb1_field_map=dict(starter.wb1_field_map),
             wb1_record_defaults=dict(starter.wb1_record_defaults),
             wb1_role_codes=dict(starter.wb1_role_codes),
