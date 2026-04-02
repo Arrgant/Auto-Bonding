@@ -161,11 +161,12 @@ class XLSMWriter:
     ) -> bytes | None:
         if pfile_sheet_path is None:
             return None
-        if not template.pfile_cell_overrides:
+        resolved_overrides = template.resolve_pfile_cell_overrides()
+        if not resolved_overrides:
             return None
 
         worksheet = ET.fromstring(archive.read(pfile_sheet_path))
-        _apply_sheet_cell_overrides(worksheet, template.pfile_cell_overrides)
+        _apply_sheet_cell_overrides(worksheet, resolved_overrides)
         return _xml_bytes(worksheet)
 
 

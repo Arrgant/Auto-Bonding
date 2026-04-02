@@ -142,7 +142,9 @@ def test_xlsm_writer_applies_pfile_cell_overrides_when_sheet_exists(tmp_path):
         template_id="demo",
         name="Demo",
         xlsm_template_path=str(template_path),
-        pfile_cell_overrides={"A4": 25, "B4": 9999, "AF12": 100, "C13": "MODE"},
+        pfile_field_map={"search_force": "A4", "wait_time": "B4", "wire_mode": "C13"},
+        pfile_named_defaults={"search_force": 25, "wait_time": 100, "wire_mode": "AUTO"},
+        pfile_cell_overrides={"B4": 9999, "AF12": 100, "C13": "MODE"},
     )
     ordered_wires = [
         OrderedWireRecord(

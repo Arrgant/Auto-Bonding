@@ -19,6 +19,8 @@ def test_wire_recipe_template_store_round_trips_templates(tmp_path):
         default_z=320.0,
         ordering=WireOrderingConfig(primary_axis="y", group_no=3),
         header_defaults={"wire_size_code": 3},
+        pfile_field_map={"search_force": "A4"},
+        pfile_named_defaults={"search_force": 25},
         pfile_cell_overrides={"A4": 25, "B4": 9999},
         record_defaults={"search_speed": 9900},
         role_record_defaults={"first": {"search_speed": 50}, "second": {"search_speed": 99}},
@@ -38,6 +40,8 @@ def test_wire_recipe_template_store_round_trips_templates(tmp_path):
     assert loaded.wb1_template_path == "C:/fixtures/sample.WB1"
     assert loaded.ordering.primary_axis == "y"
     assert loaded.ordering.group_no == 3
+    assert loaded.pfile_field_map["search_force"] == "A4"
+    assert loaded.pfile_named_defaults["search_force"] == 25
     assert loaded.pfile_cell_overrides["A4"] == 25
     assert loaded.pfile_cell_overrides["B4"] == 9999
     assert loaded.role_record_defaults["first"]["search_speed"] == 50
@@ -74,8 +78,10 @@ def test_wire_recipe_template_store_includes_builtin_rx2000_default(tmp_path):
     assert builtin.default_z == 1455.2
     assert builtin.header_defaults["PRE:1:2"] == "002D"
     assert builtin.header_defaults["H:0:5"] == "0001"
-    assert builtin.pfile_cell_overrides["A4"] == 25
-    assert builtin.pfile_cell_overrides["AF12"] == 100
+    assert builtin.pfile_field_map["search_force"] == "A8"
+    assert builtin.pfile_named_defaults["search_force"] == 100
+    assert builtin.resolve_pfile_cell_overrides()["AF12"] == 100
+    assert "A8" not in builtin.pfile_cell_overrides
     assert builtin.role_record_defaults["first"]["loop_setting"] == 55
     assert builtin.role_record_defaults["second"]["loop_setting"] == 50
     assert builtin.wb1_field_map["bond_x"] == 38

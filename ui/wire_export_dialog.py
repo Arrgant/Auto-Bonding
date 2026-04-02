@@ -93,7 +93,7 @@ class WireExportDialog(QDialog):
             "WB1 export uses the sample template path plus the field mapping JSON, "
             "while XLSM export copies the macro workbook, adds a safe coordinate sheet, "
             "backfills the WB input sheet when a WB1 template is also configured, "
-            "and applies any saved PFILE cell overrides."
+            "and applies any saved PFILE named defaults plus cell overrides."
         )
         summary.setWordWrap(True)
         layout.addWidget(summary)
@@ -262,10 +262,20 @@ class WireExportDialog(QDialog):
             "Record Defaults",
             "Named non-coordinate defaults that match WB1 field names when available.",
         )
+        self.pfile_named_defaults_edit = self._build_json_editor(
+            layout,
+            "PFILE Named Defaults",
+            "Named RX2000 parameters that compile into PFILE cells before raw cell overrides are applied.",
+        )
+        self.pfile_field_map_edit = self._build_json_editor(
+            layout,
+            "PFILE Field Map",
+            "Maps named PFILE parameters to cells, for example {\"search_force\": \"A8\"}.",
+        )
         self.pfile_cell_overrides_edit = self._build_json_editor(
             layout,
             "PFILE Cell Overrides",
-            "XLSM PFILE sheet overrides keyed by cell, for example {\"A4\": 25, \"B4\": 9999}.",
+            "Raw XLSM PFILE sheet overrides keyed by cell, for example {\"A4\": 25}. These win over named defaults.",
         )
         self.role_record_defaults_edit = self._build_json_editor(
             layout,
@@ -428,6 +438,8 @@ class WireExportDialog(QDialog):
         self._set_combo_by_data(self.start_role_combo, template.ordering.start_role)
         self.group_no_spin.setValue(template.ordering.group_no)
         self.record_defaults_edit.setPlainText(self._to_json(template.record_defaults))
+        self.pfile_named_defaults_edit.setPlainText(self._to_json(template.pfile_named_defaults))
+        self.pfile_field_map_edit.setPlainText(self._to_json(template.pfile_field_map))
         self.pfile_cell_overrides_edit.setPlainText(self._to_json(template.pfile_cell_overrides))
         self.role_record_defaults_edit.setPlainText(self._to_json(template.role_record_defaults))
         self.header_defaults_edit.setPlainText(self._to_json(template.header_defaults))
@@ -506,6 +518,8 @@ class WireExportDialog(QDialog):
             default_z=template.default_z,
             ordering=template.ordering,
             header_defaults=template.header_defaults,
+            pfile_field_map=template.pfile_field_map,
+            pfile_named_defaults=template.pfile_named_defaults,
             pfile_cell_overrides=template.pfile_cell_overrides,
             record_defaults=template.record_defaults,
             role_record_defaults=template.role_record_defaults,
@@ -517,6 +531,14 @@ class WireExportDialog(QDialog):
     def _collect_template(self, *, show_errors: bool) -> WireRecipeTemplate | None:
         try:
             record_defaults = self._parse_json_object(self.record_defaults_edit.toPlainText(), "Record Defaults")
+            pfile_named_defaults = self._parse_json_object(
+                self.pfile_named_defaults_edit.toPlainText(),
+                "PFILE Named Defaults",
+            )
+            pfile_field_map = self._parse_json_object(
+                self.pfile_field_map_edit.toPlainText(),
+                "PFILE Field Map",
+            )
             pfile_cell_overrides = self._parse_json_object(
                 self.pfile_cell_overrides_edit.toPlainText(),
                 "PFILE Cell Overrides",
@@ -538,6 +560,8 @@ class WireExportDialog(QDialog):
             return None
 
         name = self.template_name_edit.text().strip() or "New Template"
+        pfile_field_map = self._normalize_field_map(pfile_field_map)
+        pfile_named_defaults = {str(key): value for key, value in pfile_named_defaults.items()}
         try:
             field_map = {str(key): int(value) for key, value in wb1_field_map.items()}
             record_index_defaults = {int(key): value for key, value in wb1_record_defaults.items()}
@@ -569,6 +593,8 @@ class WireExportDialog(QDialog):
                 group_no=int(self.group_no_spin.value()),
             ),
             header_defaults=header_defaults,
+            pfile_field_map=pfile_field_map,
+            pfile_named_defaults=pfile_named_defaults,
             pfile_cell_overrides=pfile_overrides,
             record_defaults=record_defaults,
             role_record_defaults=role_named_defaults,
@@ -603,6 +629,15 @@ class WireExportDialog(QDialog):
 
     def _normalize_cell_overrides(self, payload: dict[str, Any]) -> dict[str, Any]:
         return {str(key).strip().upper(): value for key, value in payload.items() if str(key).strip()}
+
+    def _normalize_field_map(self, payload: dict[str, Any]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for key, value in payload.items():
+            field_name = str(key).strip()
+            cell_ref = str(value).strip().upper()
+            if field_name and cell_ref:
+                normalized[field_name] = cell_ref
+        return normalized
 
     def _refresh_preview(self) -> None:
         if self._loading_template:
@@ -687,6 +722,8 @@ class WireExportDialog(QDialog):
             default_z=starter.default_z,
             ordering=starter.ordering,
             header_defaults=dict(starter.header_defaults),
+            pfile_field_map=dict(starter.pfile_field_map),
+            pfile_named_defaults=dict(starter.pfile_named_defaults),
             pfile_cell_overrides=dict(starter.pfile_cell_overrides),
             record_defaults=dict(starter.record_defaults),
             role_record_defaults={

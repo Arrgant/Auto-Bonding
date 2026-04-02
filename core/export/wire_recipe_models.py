@@ -24,6 +24,8 @@ class WireRecipeTemplate:
     default_z: float = 0.0
     ordering: WireOrderingConfig = field(default_factory=WireOrderingConfig)
     header_defaults: dict[str, TemplateScalar] = field(default_factory=dict)
+    pfile_field_map: dict[str, str] = field(default_factory=dict)
+    pfile_named_defaults: dict[str, TemplateScalar] = field(default_factory=dict)
     pfile_cell_overrides: dict[str, TemplateScalar] = field(default_factory=dict)
     record_defaults: dict[str, TemplateScalar] = field(default_factory=dict)
     role_record_defaults: dict[str, dict[str, TemplateScalar]] = field(default_factory=dict)
@@ -52,6 +54,8 @@ class WireRecipeTemplate:
                 "group_no": self.ordering.group_no,
             },
             "header_defaults": dict(self.header_defaults),
+            "pfile_field_map": dict(self.pfile_field_map),
+            "pfile_named_defaults": dict(self.pfile_named_defaults),
             "pfile_cell_overrides": dict(self.pfile_cell_overrides),
             "record_defaults": dict(self.record_defaults),
             "role_record_defaults": {
@@ -87,6 +91,8 @@ class WireRecipeTemplate:
             default_z=float(payload.get("default_z", 0.0)),
             ordering=ordering,
             header_defaults=_coerce_scalar_mapping(payload.get("header_defaults")),
+            pfile_field_map=_coerce_pfile_field_map(payload.get("pfile_field_map")),
+            pfile_named_defaults=_coerce_scalar_mapping(payload.get("pfile_named_defaults")),
             pfile_cell_overrides=_coerce_cell_override_mapping(payload.get("pfile_cell_overrides")),
             record_defaults=_coerce_scalar_mapping(payload.get("record_defaults")),
             role_record_defaults=_coerce_role_scalar_mapping(payload.get("role_record_defaults")),
@@ -94,6 +100,17 @@ class WireRecipeTemplate:
             wb1_record_defaults=_coerce_record_defaults(payload.get("wb1_record_defaults")),
             wb1_role_codes=_coerce_role_codes(payload.get("wb1_role_codes")),
         )
+
+    def resolve_pfile_cell_overrides(self) -> dict[str, TemplateScalar]:
+        """Return merged PFILE overrides with raw cell edits taking precedence."""
+
+        resolved: dict[str, TemplateScalar] = {}
+        for field_name, value in self.pfile_named_defaults.items():
+            cell_ref = self.pfile_field_map.get(field_name)
+            if cell_ref:
+                resolved[cell_ref] = value
+        resolved.update(self.pfile_cell_overrides)
+        return resolved
 
 
 def _optional_str(value: object) -> str | None:
@@ -144,6 +161,22 @@ def _coerce_cell_override_mapping(value: object) -> dict[str, TemplateScalar]:
     return coerced
 
 
+def _coerce_pfile_field_map(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    coerced: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            continue
+        field_name = key.strip()
+        if not field_name:
+            continue
+        cell_ref = _normalize_cell_ref(item)
+        if cell_ref is not None:
+            coerced[field_name] = cell_ref
+    return coerced
+
+
 def _coerce_role_scalar_mapping(value: object) -> dict[str, dict[str, TemplateScalar]]:
     if not isinstance(value, dict):
         return {}
@@ -181,6 +214,13 @@ def _coerce_role_codes(value: object) -> dict[str, WB1RecordOverrideValue]:
         if isinstance(item, (int, str)):
             coerced[key] = item
     return coerced or {"first": 0, "second": 2}
+
+
+def _normalize_cell_ref(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().upper()
+    return text or None
 
 
 __all__ = [
