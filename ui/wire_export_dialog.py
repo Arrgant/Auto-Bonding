@@ -268,7 +268,7 @@ class WireExportDialog(QDialog):
         self.header_defaults_edit = self._build_json_editor(
             layout,
             "Header Defaults",
-            "Top-level recipe defaults that stay with the template for later WB1 header mapping.",
+            "WB1 header word overrides using PRE:line:word or G/H/I:line:word, for example {\"PRE:1:2\": 45, \"H:0:5\": 1}.",
         )
         self.wb1_field_map_edit = self._build_json_editor(
             layout,

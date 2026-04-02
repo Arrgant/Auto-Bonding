@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -37,6 +38,7 @@ class WB1Writer:
             second_prototype=second_prototype,
         )
 
+        _apply_header_defaults(lines, template.header_defaults)
         lines[0] = _replace_filename_header(lines[0], output_name)
         updated_lines = lines[: section_start + 1] + generated_records + lines[section_end:]
         return "\n".join(updated_lines) + "\n"
@@ -195,11 +197,80 @@ def _ensure_record_capacity(
     return fields
 
 
+def _apply_header_defaults(lines: list[str], header_defaults: dict[str, object]) -> None:
+    if not header_defaults:
+        return
+    sections = _find_sections(lines)
+    for key, value in header_defaults.items():
+        location = _parse_header_location(key)
+        if location is None:
+            continue
+        line_index = _resolve_header_line_index(lines, sections, location)
+        if line_index is None:
+            continue
+        lines[line_index] = _apply_word_override(lines[line_index], location.word_index, value)
+
+
+def _find_sections(lines: list[str]) -> dict[str, int]:
+    return {line.rstrip(","): index for index, line in enumerate(lines) if line in SECTION_MARKERS}
+
+
+def _parse_header_location(key: object) -> _HeaderLocation | None:
+    if not isinstance(key, str):
+        return None
+    parts = key.split(":")
+    if len(parts) != 3:
+        return None
+    section_name = parts[0].strip().upper()
+    if section_name == "PREAMBLE":
+        section_name = "PRE"
+    try:
+        line_offset = int(parts[1])
+        word_index = int(parts[2])
+    except ValueError:
+        return None
+    if line_offset < 0 or word_index < 0:
+        return None
+    return _HeaderLocation(section_name=section_name, line_offset=line_offset, word_index=word_index)
+
+
+def _resolve_header_line_index(
+    lines: list[str],
+    sections: dict[str, int],
+    location: _HeaderLocation,
+) -> int | None:
+    if location.section_name == "PRE":
+        if location.line_offset >= len(lines):
+            return None
+        section_floor = min(sections.values(), default=len(lines))
+        if location.line_offset >= section_floor:
+            return None
+        return location.line_offset
+
+    section_start = sections.get(location.section_name)
+    if section_start is None:
+        return None
+    next_markers = [index for name, index in sections.items() if index > section_start]
+    section_end = min(next_markers, default=len(lines))
+    target_index = section_start + 1 + location.line_offset
+    if target_index >= section_end:
+        return None
+    return target_index
+
+
+def _apply_word_override(line: str, word_index: int, value: object) -> str:
+    fields = _split_record_tokens(line)
+    if word_index >= len(fields):
+        fields.extend(["0000"] * (word_index + 1 - len(fields)))
+    fields[word_index] = _encode_override_value(value)
+    return ",".join(fields) + ","
+
+
 def _set_field(
     fields: list[str],
     field_map: dict[str, int],
     field_name: str,
-    value: WB1RecordOverrideValue | int,
+    value: object,
 ) -> None:
     index = field_map.get(field_name)
     if index is None:
@@ -207,13 +278,15 @@ def _set_field(
     fields[index] = _encode_override_value(value)
 
 
-def _encode_override_value(value: WB1RecordOverrideValue | int) -> str:
+def _encode_override_value(value: object) -> str:
     if isinstance(value, str):
         normalized = value.strip().upper()
         if not normalized:
             return "0000"
         return normalized
-    return _encode_hex_word(int(value))
+    if isinstance(value, (bool, int, float)):
+        return _encode_hex_word(int(value))
+    raise TypeError(f"Unsupported WB1 override value: {value!r}")
 
 
 def _scaled_coord(value: float, coord_scale: float) -> int:
@@ -224,6 +297,13 @@ def _encode_hex_word(value: int) -> str:
     if value < -32768 or value > 65535:
         raise ValueError(f"WB1 word value out of range: {value}")
     return f"{value & 0xFFFF:04X}"
+
+
+@dataclass(frozen=True)
+class _HeaderLocation:
+    section_name: str
+    line_offset: int
+    word_index: int
 
 
 __all__ = ["WB1Writer"]

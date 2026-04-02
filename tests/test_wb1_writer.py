@@ -229,6 +229,58 @@ def test_wb1_writer_applies_role_specific_named_defaults(tmp_path):
     assert lines[3] == "0002,0007,0063,00FA,01F4,1CA3,0003,"
 
 
+def test_wb1_writer_applies_header_defaults_to_preamble_and_sections(tmp_path):
+    template_path = tmp_path / "header-template.WB1"
+    template_path.write_text(
+        "\n".join(
+            [
+                "0000,4845414445522E5742310000,",
+                "0004,0001,0000,0016,",
+                "0000,0000,",
+                "G,",
+                "0000,0000,",
+                "H,",
+                "0000,0000,0000,",
+                "J,",
+                "0000,0000,",
+                "0002,0000,",
+                "Q",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    template = WireRecipeTemplate(
+        template_id="header",
+        name="Header",
+        wb1_template_path=str(template_path),
+        header_defaults={
+            "PRE:1:2": 45,
+            "G:0:1": 50,
+            "H:0:2": "00FF",
+        },
+        wb1_field_map={"role_code": 0},
+    )
+
+    ordered_wires = [
+        OrderedWireRecord(
+            wire_id="W0200",
+            wire_seq=1,
+            group_no=1,
+            first_point_seq=1,
+            second_point_seq=2,
+            geometry=_wire_geometry("W0200", (1.0, 2.0), (3.0, 4.0)),
+        )
+    ]
+
+    lines = WB1Writer().render(ordered_wires, template, output_name="NEW.WB1").splitlines()
+
+    assert lines[0] == "0000,4E45572E5742310000,"
+    assert lines[1] == "0004,0001,002D,0016,"
+    assert lines[4] == "0000,0032,"
+    assert lines[6] == "0000,0000,00FF,"
+
+
 def _wire_geometry(wire_id: str, first_xy: tuple[float, float], second_xy: tuple[float, float]) -> WireGeometry:
     first_point = WirePoint(point_id=f"{wire_id}-P1", wire_id=wire_id, role="first", x=first_xy[0], y=first_xy[1])
     second_point = WirePoint(
