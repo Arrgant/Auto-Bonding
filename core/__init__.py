@@ -6,6 +6,7 @@ from .export.wire_extraction import extract_wire_geometries
 from .export.xlsm_writer import XLSMWriter
 from .export.wire_models import OrderedWireRecord, WireGeometry, WireOrderingConfig, WirePoint
 from .export.wire_production_exporter import WireProductionExporter, WireProductionExportResult
+from .export.wire_recipe_defaults import RX2000_STARTER_WB1_FIELD_MAP, build_rx2000_default_template
 from .export.wire_recipe_models import WireRecipeTemplate
 from .export.wire_ordering import order_wire_geometries
 from .geometry.converter import BondingDiagramConverter, BondingElement, WireLoop
@@ -55,6 +56,7 @@ __all__ = [
     "IGBT_RULES_HIGH_VOLTAGE",
     "PreparedDocument",
     "RelationNote",
+    "RX2000_STARTER_WB1_FIELD_MAP",
     "RawImportPreview",
     "SemanticCandidate",
     "SemanticClassificationResult",
@@ -70,6 +72,7 @@ __all__ = [
     "WirePoint",
     "WireRecipeTemplate",
     "WireType",
+    "build_rx2000_default_template",
     "build_conversion_artifacts",
     "build_drc_report",
     "extract_coordinates_from_raw_entities",

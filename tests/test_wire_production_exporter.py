@@ -61,6 +61,28 @@ def test_wire_production_exporter_writes_both_outputs(tmp_path):
         assert "xl/worksheets/sheet2.xml" in archive.namelist()
 
 
+def test_wire_production_exporter_reports_validation_issues(tmp_path):
+    template = WireRecipeTemplate(
+        template_id="demo",
+        name="Demo",
+        wb1_template_path=str(tmp_path / "missing.WB1"),
+        xlsm_template_path=None,
+    )
+
+    issues = WireProductionExporter().validate_export_request(
+        [],
+        template,
+        base_name="",
+        export_wb1=True,
+        export_xlsm=True,
+    )
+
+    assert "No wire geometries are available for export." in issues
+    assert "Base file name is required." in issues
+    assert any(issue.startswith("WB1 template not found:") for issue in issues)
+    assert "XLSM template path is required for XLSM export." in issues
+
+
 def _build_minimal_xlsm_template(path: Path) -> None:
     workbook_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">

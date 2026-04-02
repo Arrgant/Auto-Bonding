@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from core.export import build_rx2000_default_template
 from core.export.wire_recipe_models import WireRecipeTemplate
 from core.export.wire_models import WireOrderingConfig
 from services import WireRecipeTemplateStore
@@ -48,4 +49,19 @@ def test_wire_recipe_template_store_deletes_templates(tmp_path):
 
     store.delete_template("demo")
 
-    assert store.list_templates() == []
+    assert store.get_template("demo") is None
+    assert any(item.template_id == "rx2000-default" for item in store.list_templates())
+
+
+def test_wire_recipe_template_store_includes_builtin_rx2000_default(tmp_path):
+    store_path = tmp_path / "wire_templates.json"
+    store = WireRecipeTemplateStore(store_path)
+
+    templates = store.list_templates()
+
+    assert any(template.template_id == "rx2000-default" for template in templates)
+    builtin = store.get_template("rx2000-default")
+    expected = build_rx2000_default_template()
+    assert builtin is not None
+    assert builtin.name == expected.name
+    assert builtin.wb1_field_map == expected.wb1_field_map

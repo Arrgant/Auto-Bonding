@@ -32,18 +32,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.export import WireProductionExporter, WireRecipeTemplate, WireOrderingConfig
+from core.export import (
+    WireProductionExporter,
+    WireRecipeTemplate,
+    WireOrderingConfig,
+    build_rx2000_default_template,
+)
 from services import ProjectDocument, WireRecipeTemplateStore
-
-STARTER_WB1_FIELD_MAP = {
-    "role_code": 0,
-    "wire_seq": 1,
-    "bond_x": 2,
-    "bond_y": 3,
-    "bond_z": 4,
-    "group_no": 5,
-}
-
 
 @dataclass(frozen=True)
 class WireExportRequest:
@@ -230,12 +225,19 @@ class WireExportDialog(QDialog):
         ordering_layout.addWidget(QLabel("Direction"), 0, 2)
         ordering_layout.addWidget(self.primary_direction_combo, 0, 3)
 
+        self.secondary_direction_combo = QComboBox()
+        self.secondary_direction_combo.addItem("Ascending", "asc")
+        self.secondary_direction_combo.addItem("Descending", "desc")
+        self.secondary_direction_combo.currentIndexChanged.connect(self._refresh_preview)
+        ordering_layout.addWidget(QLabel("Tie Break"), 1, 0)
+        ordering_layout.addWidget(self.secondary_direction_combo, 1, 1)
+
         self.start_role_combo = QComboBox()
         self.start_role_combo.addItem("First Bond First", "first")
         self.start_role_combo.addItem("Second Bond First", "second")
         self.start_role_combo.currentIndexChanged.connect(self._refresh_preview)
-        ordering_layout.addWidget(QLabel("Point Order"), 1, 0)
-        ordering_layout.addWidget(self.start_role_combo, 1, 1, 1, 3)
+        ordering_layout.addWidget(QLabel("Point Order"), 1, 2)
+        ordering_layout.addWidget(self.start_role_combo, 1, 3)
 
         self.group_no_spin = QSpinBox()
         self.group_no_spin.setRange(1, 999999)
@@ -257,6 +259,11 @@ class WireExportDialog(QDialog):
             layout,
             "Record Defaults",
             "Named non-coordinate defaults that match WB1 field names when available.",
+        )
+        self.header_defaults_edit = self._build_json_editor(
+            layout,
+            "Header Defaults",
+            "Top-level recipe defaults that stay with the template for later WB1 header mapping.",
         )
         self.wb1_field_map_edit = self._build_json_editor(
             layout,
@@ -333,7 +340,7 @@ class WireExportDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         layout.addWidget(line_edit, stretch=1)
-        button = QPushButton("Browse…")
+        button = QPushButton("Browse...")
         button.clicked.connect(handler)
         layout.addWidget(button)
         return row
@@ -405,9 +412,11 @@ class WireExportDialog(QDialog):
         self.default_z_spin.setValue(template.default_z)
         self._set_combo_by_data(self.primary_axis_combo, template.ordering.primary_axis)
         self._set_combo_by_data(self.primary_direction_combo, template.ordering.primary_direction)
+        self._set_combo_by_data(self.secondary_direction_combo, template.ordering.secondary_direction)
         self._set_combo_by_data(self.start_role_combo, template.ordering.start_role)
         self.group_no_spin.setValue(template.ordering.group_no)
         self.record_defaults_edit.setPlainText(self._to_json(template.record_defaults))
+        self.header_defaults_edit.setPlainText(self._to_json(template.header_defaults))
         self.wb1_field_map_edit.setPlainText(self._to_json(template.wb1_field_map))
         self.wb1_record_defaults_edit.setPlainText(self._to_json(template.wb1_record_defaults))
         self.wb1_role_codes_edit.setPlainText(self._to_json(template.wb1_role_codes))
@@ -492,6 +501,7 @@ class WireExportDialog(QDialog):
     def _collect_template(self, *, show_errors: bool) -> WireRecipeTemplate | None:
         try:
             record_defaults = self._parse_json_object(self.record_defaults_edit.toPlainText(), "Record Defaults")
+            header_defaults = self._parse_json_object(self.header_defaults_edit.toPlainText(), "Header Defaults")
             wb1_field_map = self._parse_json_object(self.wb1_field_map_edit.toPlainText(), "WB1 Field Map")
             wb1_record_defaults = self._parse_json_object(
                 self.wb1_record_defaults_edit.toPlainText(),
@@ -523,11 +533,11 @@ class WireExportDialog(QDialog):
             ordering=WireOrderingConfig(
                 primary_axis=str(self.primary_axis_combo.currentData()),
                 primary_direction=str(self.primary_direction_combo.currentData()),
-                secondary_direction="asc",
+                secondary_direction=str(self.secondary_direction_combo.currentData()),
                 start_role=str(self.start_role_combo.currentData()),
                 group_no=int(self.group_no_spin.value()),
             ),
-            header_defaults=dict(self._current_header_defaults),
+            header_defaults=header_defaults,
             record_defaults=record_defaults,
             wb1_field_map=field_map,
             wb1_record_defaults=record_index_defaults,
@@ -595,21 +605,21 @@ class WireExportDialog(QDialog):
         if template is None:
             return
 
-        if export_wb1 and not template.wb1_template_path:
-            QMessageBox.warning(self, "Wire export", "Choose a WB1 template path before exporting WB1.")
-            return
-        if export_xlsm and not template.xlsm_template_path:
-            QMessageBox.warning(self, "Wire export", "Choose an XLSM template path before exporting XLSM.")
-            return
-
         output_directory_text = self.output_directory_edit.text().strip()
         if not output_directory_text:
             QMessageBox.warning(self, "Wire export", "Choose an output directory.")
             return
 
         base_name = self.base_name_edit.text().strip()
-        if not base_name:
-            QMessageBox.warning(self, "Wire export", "Enter a base file name.")
+        issues = self._production_exporter.validate_export_request(
+            self.document.wire_geometries,
+            template,
+            base_name=base_name,
+            export_wb1=export_wb1,
+            export_xlsm=export_xlsm,
+        )
+        if issues:
+            QMessageBox.warning(self, "Wire export", "\n".join(issues))
             return
 
         self._export_request = WireExportRequest(
@@ -622,17 +632,21 @@ class WireExportDialog(QDialog):
         self.accept()
 
     def _build_starter_template(self) -> WireRecipeTemplate:
+        starter = build_rx2000_default_template()
         return WireRecipeTemplate(
             template_id="starter-template",
             name="New Template",
-            machine_type="RX2000",
-            coord_scale=1.0,
-            default_z=0.0,
-            header_defaults={},
-            record_defaults={},
-            wb1_field_map=dict(STARTER_WB1_FIELD_MAP),
-            wb1_record_defaults={},
-            wb1_role_codes={"first": 0, "second": 2},
+            machine_type=starter.machine_type,
+            wb1_template_path=starter.wb1_template_path,
+            xlsm_template_path=starter.xlsm_template_path,
+            coord_scale=starter.coord_scale,
+            default_z=starter.default_z,
+            ordering=starter.ordering,
+            header_defaults=dict(starter.header_defaults),
+            record_defaults=dict(starter.record_defaults),
+            wb1_field_map=dict(starter.wb1_field_map),
+            wb1_record_defaults=dict(starter.wb1_record_defaults),
+            wb1_role_codes=dict(starter.wb1_role_codes),
         )
 
     def _make_template_id(self, name: str, *, suffix: str | None = None) -> str:

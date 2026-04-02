@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from core.export.wire_recipe_defaults import default_wire_recipe_templates
 from core.export.wire_recipe_models import WireRecipeTemplate
 
 
@@ -46,18 +47,19 @@ class WireRecipeTemplateStore:
         self._save()
 
     def _load(self) -> dict[str, WireRecipeTemplate]:
+        templates: dict[str, WireRecipeTemplate] = {
+            template.template_id: template for template in default_wire_recipe_templates()
+        }
         if not self.path.exists():
-            return {}
+            return templates
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except Exception:
-            return {}
+            return templates
 
         items = payload.get("templates", [])
         if not isinstance(items, list):
-            return {}
-
-        templates: dict[str, WireRecipeTemplate] = {}
+            return templates
         for item in items:
             if not isinstance(item, dict):
                 continue
