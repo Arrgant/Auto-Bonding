@@ -31,6 +31,7 @@ class WireRecipeTemplate:
     role_record_defaults: dict[str, dict[str, TemplateScalar]] = field(default_factory=dict)
     wb1_field_map: dict[str, int] = field(default_factory=dict)
     wb1_record_defaults: dict[int, WB1RecordOverrideValue] = field(default_factory=dict)
+    bond_angle_mode: str = "template"
     wb1_role_codes: dict[str, WB1RecordOverrideValue] = field(
         default_factory=lambda: {"first": 0, "second": 2}
     )
@@ -66,6 +67,7 @@ class WireRecipeTemplate:
             "wb1_record_defaults": {
                 str(index): value for index, value in sorted(self.wb1_record_defaults.items())
             },
+            "bond_angle_mode": self.bond_angle_mode,
             "wb1_role_codes": dict(self.wb1_role_codes),
         }
 
@@ -100,6 +102,7 @@ class WireRecipeTemplate:
             role_record_defaults=_coerce_role_scalar_mapping(payload.get("role_record_defaults")),
             wb1_field_map=_coerce_int_mapping(payload.get("wb1_field_map")),
             wb1_record_defaults=_coerce_record_defaults(payload.get("wb1_record_defaults")),
+            bond_angle_mode=_coerce_bond_angle_mode(payload.get("bond_angle_mode")),
             wb1_role_codes=_coerce_role_codes(payload.get("wb1_role_codes")),
         )
 
@@ -216,6 +219,13 @@ def _coerce_role_codes(value: object) -> dict[str, WB1RecordOverrideValue]:
         if isinstance(item, (int, str)):
             coerced[key] = item
     return coerced or {"first": 0, "second": 2}
+
+
+def _coerce_bond_angle_mode(value: object) -> str:
+    text = str(value or "template").strip().lower()
+    if text not in {"template", "wire_vector"}:
+        return "template"
+    return text
 
 
 def _normalize_cell_ref(value: object) -> str | None:

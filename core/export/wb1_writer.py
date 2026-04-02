@@ -119,6 +119,8 @@ class WB1Writer:
         _set_field(fields, field_map, "bond_x", _scaled_coord(point.x, template.coord_scale))
         _set_field(fields, field_map, "bond_y", _scaled_coord(point.y, template.coord_scale))
         _set_field(fields, field_map, "bond_z", _scaled_coord(point.z or template.default_z, template.coord_scale))
+        if template.bond_angle_mode == "wire_vector":
+            _set_field(fields, field_map, "bond_angle", _wire_vector_angle_word(ordered_record))
         _set_field(fields, field_map, "camera_x", 0)
         _set_field(fields, field_map, "camera_y", 0)
         _set_field(fields, field_map, "camera_z", 0)
@@ -291,6 +293,10 @@ def _encode_override_value(value: object) -> str:
 
 def _scaled_coord(value: float, coord_scale: float) -> int:
     return int(round(value * coord_scale))
+
+
+def _wire_vector_angle_word(record: OrderedWireRecord) -> int:
+    return int(round(record.geometry.angle_deg))
 
 
 def _encode_hex_word(value: int) -> str:

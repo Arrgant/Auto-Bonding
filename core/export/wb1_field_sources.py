@@ -340,9 +340,9 @@ RX2000_WB1_FIELD_SOURCES: dict[str, WB1FieldSourceInfo] = {
     "bond_angle": WB1FieldSourceInfo(
         field_name="bond_angle",
         dxf_availability="derived",
-        current_source="shared template default",
+        current_source="shared template default / optional wire_vector mode",
         current_from_dxf=False,
-        note="Can be derived from the endpoint vector angle, but current exporter still uses template defaults.",
+        note="The exporter can optionally write the wire vector angle, but RX2000 default templates still keep bond angle template-driven until machine validation confirms the heuristic.",
     ),
     "climb_angle": WB1FieldSourceInfo(
         field_name="climb_angle",

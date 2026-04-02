@@ -281,7 +281,57 @@ def test_wb1_writer_applies_header_defaults_to_preamble_and_sections(tmp_path):
     assert lines[6] == "0000,0000,00FF,"
 
 
-def _wire_geometry(wire_id: str, first_xy: tuple[float, float], second_xy: tuple[float, float]) -> WireGeometry:
+def test_wb1_writer_can_optionally_derive_bond_angle_from_wire_vector(tmp_path):
+    template_path = tmp_path / "angle-template.WB1"
+    template_path.write_text(
+        "\n".join(
+            [
+                "0000,414E474C452E5742310000,",
+                "J,",
+                "0000,0000,0000,",
+                "0002,0000,0000,",
+                "Q",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    template = WireRecipeTemplate(
+        template_id="angle",
+        name="Angle",
+        wb1_template_path=str(template_path),
+        bond_angle_mode="wire_vector",
+        wb1_field_map={
+            "role_code": 0,
+            "wire_seq": 1,
+            "bond_angle": 2,
+        },
+    )
+
+    ordered_wires = [
+        OrderedWireRecord(
+            wire_id="W0300",
+            wire_seq=1,
+            group_no=1,
+            first_point_seq=1,
+            second_point_seq=2,
+            geometry=_wire_geometry("W0300", (0.0, 0.0), (10.0, 10.0), angle_deg=45.0),
+        )
+    ]
+
+    lines = WB1Writer().render(ordered_wires, template, output_name="ANGLE.WB1").splitlines()
+
+    assert lines[2] == "0000,0001,002D,"
+    assert lines[3] == "0002,0001,002D,"
+
+
+def _wire_geometry(
+    wire_id: str,
+    first_xy: tuple[float, float],
+    second_xy: tuple[float, float],
+    *,
+    angle_deg: float = 0.0,
+) -> WireGeometry:
     first_point = WirePoint(point_id=f"{wire_id}-P1", wire_id=wire_id, role="first", x=first_xy[0], y=first_xy[1])
     second_point = WirePoint(
         point_id=f"{wire_id}-P2",
@@ -299,6 +349,6 @@ def _wire_geometry(wire_id: str, first_xy: tuple[float, float], second_xy: tuple
         first_point=first_point,
         second_point=second_point,
         length=1.0,
-        angle_deg=0.0,
+        angle_deg=angle_deg,
         bbox=(min(first_xy[0], second_xy[0]), min(first_xy[1], second_xy[1]), max(first_xy[0], second_xy[0]), max(first_xy[1], second_xy[1])),
     )

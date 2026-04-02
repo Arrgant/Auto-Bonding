@@ -250,6 +250,12 @@ class WireExportDialog(QDialog):
         self.default_z_spin.valueChanged.connect(self._refresh_preview)
         form.addRow("Default Z", self.default_z_spin)
 
+        self.bond_angle_mode_combo = QComboBox()
+        self.bond_angle_mode_combo.addItem("Template", "template")
+        self.bond_angle_mode_combo.addItem("Wire Vector (Heuristic)", "wire_vector")
+        self.bond_angle_mode_combo.currentIndexChanged.connect(self._refresh_preview)
+        form.addRow("Bond Angle", self.bond_angle_mode_combo)
+
         ordering_row = QWidget()
         ordering_layout = QGridLayout(ordering_row)
         ordering_layout.setContentsMargins(0, 0, 0, 0)
@@ -515,6 +521,7 @@ class WireExportDialog(QDialog):
         self.xlsm_template_path_edit.setText(template.xlsm_template_path or "")
         self.coord_scale_spin.setValue(template.coord_scale)
         self.default_z_spin.setValue(template.default_z)
+        self._set_combo_by_data(self.bond_angle_mode_combo, template.bond_angle_mode)
         self._set_combo_by_data(self.primary_axis_combo, template.ordering.primary_axis)
         self._set_combo_by_data(self.primary_direction_combo, template.ordering.primary_direction)
         self._set_combo_by_data(self.secondary_direction_combo, template.ordering.secondary_direction)
@@ -603,6 +610,7 @@ class WireExportDialog(QDialog):
             xlsm_template_path=template.xlsm_template_path,
             coord_scale=template.coord_scale,
             default_z=template.default_z,
+            bond_angle_mode=template.bond_angle_mode,
             ordering=template.ordering,
             header_defaults=template.header_defaults,
             pfile_field_map=template.pfile_field_map,
@@ -681,6 +689,7 @@ class WireExportDialog(QDialog):
             xlsm_template_path=self._optional_path(self.xlsm_template_path_edit.text()),
             coord_scale=float(self.coord_scale_spin.value()),
             default_z=float(self.default_z_spin.value()),
+            bond_angle_mode=str(self.bond_angle_mode_combo.currentData()),
             ordering=WireOrderingConfig(
                 primary_axis=str(self.primary_axis_combo.currentData()),
                 primary_direction=str(self.primary_direction_combo.currentData()),
@@ -819,6 +828,7 @@ class WireExportDialog(QDialog):
             xlsm_template_path=starter.xlsm_template_path,
             coord_scale=starter.coord_scale,
             default_z=starter.default_z,
+            bond_angle_mode=starter.bond_angle_mode,
             ordering=starter.ordering,
             header_defaults=dict(starter.header_defaults),
             pfile_field_map=dict(starter.pfile_field_map),

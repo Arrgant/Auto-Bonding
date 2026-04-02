@@ -125,7 +125,7 @@ Legend:
 | 42 | `bond_z` | `3d_only` | default Z fallback | No | Only geometry-backed if the source workflow carries real Z. |
 | 43 | `reserved_ar` | `no` | shared template default | No | Reserved/unknown; keep template-controlled. |
 | 44 | `contact_surface_position` | `no` | role template default | No | Process-specific contact setting. |
-| 45 | `bond_angle` | `derived` | shared template default | No | Can be derived from the endpoint vector angle later; current exporter still uses template defaults. |
+| 45 | `bond_angle` | `derived` | shared template default / optional wire_vector mode | No | The exporter can optionally write the wire vector angle, but RX2000 default templates still keep bond angle template-driven until machine validation confirms the heuristic. |
 | 46 | `climb_angle` | `no` | shared template default | No | Machine motion recipe value. |
 | 47 | `start_pressure` | `no` | shared template default | No | Bond force recipe value. |
 | 48 | `end_pressure` | `no` | shared template default | No | Bond force recipe value. |
