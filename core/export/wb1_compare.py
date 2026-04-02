@@ -55,6 +55,18 @@ class WB1Comparer:
         actual = self._parser.parse_file(actual_path, template)
         return self.compare_documents(expected, actual, template)
 
+    def compare_xlsm_wb_sheets(
+        self,
+        expected_xlsm_path: str | Path,
+        actual_xlsm_path: str | Path,
+        template: WireRecipeTemplate,
+    ) -> WB1CompareResult:
+        """Compare the WB worksheets from two XLSM files."""
+
+        expected = self._parser.parse_xlsm_wb_sheet(expected_xlsm_path, template)
+        actual = self._parser.parse_xlsm_wb_sheet(actual_xlsm_path, template)
+        return self.compare_documents(expected, actual, template)
+
     def compare_texts(
         self,
         expected_wb1: str,

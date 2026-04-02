@@ -38,6 +38,14 @@ def test_parse_and_render_wb1_rows_round_trip_with_empty_fields():
     assert render_wb1_rows(rows) == wb1_content
 
 
+def test_parse_wb1_content_ignores_terminal_dos_eof_marker():
+    wb1_content = "0000,FILE0000,\nJ,\n\x1a\n"
+
+    rows = parse_wb1_content_to_rows(wb1_content)
+
+    assert rows == [["0000", "FILE0000"], ["J"]]
+
+
 def test_worksheet_to_wb_rows_reconstructs_empty_columns():
     worksheet = ET.fromstring(
         f"""<?xml version="1.0" encoding="UTF-8"?>

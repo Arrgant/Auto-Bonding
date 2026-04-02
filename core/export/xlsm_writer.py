@@ -134,6 +134,48 @@ class XLSMWriter:
 
         return target_path
 
+    def write_wb1_import(
+        self,
+        wb1_path: str | Path,
+        template: WireRecipeTemplate,
+        output_path: str | Path,
+    ) -> Path:
+        """Copy one XLSM template and import a raw WB1 file into its WB sheet."""
+
+        template_path = _require_template_path(template)
+        source_wb1_path = Path(wb1_path)
+        if not source_wb1_path.exists():
+            raise FileNotFoundError(f"WB1 source not found: {source_wb1_path}")
+
+        target_path = Path(output_path)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        wb1_content = source_wb1_path.read_text(encoding="utf-8", errors="ignore")
+
+        with ZipFile(template_path, "r") as archive:
+            workbook_tree = ET.fromstring(archive.read("xl/workbook.xml"))
+            workbook_rels_tree = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+
+            wb_sheet_path = _find_sheet_path(workbook_tree, workbook_rels_tree, "WB")
+            if wb_sheet_path is None:
+                raise ValueError("Workbook template does not contain a WB worksheet.")
+            pfile_sheet_path = _find_sheet_path(workbook_tree, workbook_rels_tree, "PFILE")
+
+            worksheet = ET.fromstring(archive.read(wb_sheet_path))
+            _populate_wb_worksheet(worksheet, wb1_content)
+            replacements = {wb_sheet_path: _xml_bytes(worksheet)}
+
+            pfile_sheet_replacement = self._build_pfile_sheet_replacement(
+                archive,
+                template,
+                pfile_sheet_path=pfile_sheet_path,
+            )
+            if pfile_sheet_replacement is not None and pfile_sheet_path is not None:
+                replacements[pfile_sheet_path] = pfile_sheet_replacement
+
+            _copy_archive_with_replacements(archive, target_path, replacements)
+
+        return target_path
+
     def _build_wb_sheet_replacement(
         self,
         archive: ZipFile,

@@ -12,7 +12,7 @@ def parse_wb1_content_to_rows(wb1_content: str) -> list[list[str]]:
 
     rows: list[list[str]] = []
     for line in wb1_content.splitlines():
-        stripped = line.rstrip("\r")
+        stripped = _sanitize_wb1_line(line.rstrip("\r"))
         if not stripped.strip():
             continue
         rows.append(split_wb1_line_tokens(stripped))
@@ -91,6 +91,10 @@ def _column_index_from_ref(cell_ref: str) -> int:
 
 def _qn(local_name: str) -> str:
     return f"{{{MAIN_NS}}}{local_name}"
+
+
+def _sanitize_wb1_line(line: str) -> str:
+    return "".join(char for char in line if char == "\t" or ord(char) >= 32)
 
 
 __all__ = [

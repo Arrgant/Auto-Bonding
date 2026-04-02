@@ -179,6 +179,64 @@ def test_xlsm_writer_applies_pfile_cell_overrides_when_sheet_exists(tmp_path):
     assert dimension is not None and dimension.attrib["ref"] == "A2:AF13"
 
 
+def test_xlsm_writer_can_import_raw_wb1_into_existing_wb_sheet(tmp_path):
+    template_path = tmp_path / "template-with-wb.xlsm"
+    _build_xlsm_template_with_wb_sheet(template_path)
+    wb1_path = tmp_path / "source.WB1"
+    wb1_path.write_text(
+        "\n".join(
+            [
+                "0000,44454D4F2E5742310000,",
+                "0004,0001,002D,0016,",
+                "J,",
+                "0000,0001,0002,000A,0014,",
+                "0002,0001,0002,0023,002D,",
+                "Q",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    template = WireRecipeTemplate(
+        template_id="demo",
+        name="Demo",
+        xlsm_template_path=str(template_path),
+    )
+
+    output_path = tmp_path / "imported.xlsm"
+    XLSMWriter().write_wb1_import(wb1_path, template, output_path)
+
+    with ZipFile(output_path) as archive:
+        workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+        workbook_rels = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+        wb_target = _find_sheet_target(workbook, workbook_rels, "WB")
+        assert wb_target is not None
+        wb_sheet = ET.fromstring(archive.read(wb_target))
+        rows = wb_sheet.find(f"{{{MAIN_NS}}}sheetData")
+        assert rows is not None
+        wb_values = _sheet_values(rows)
+        dimension = wb_sheet.find(f"{{{MAIN_NS}}}dimension")
+
+    assert wb_values["A2"] == "keep-header"
+    assert wb_values["A4"] == "0"
+    assert wb_values["B4"] == "44454D4F2E5742310000"
+    assert wb_values["A5"] == "4"
+    assert wb_values["B5"] == "1"
+    assert wb_values["C5"] == "002D"
+    assert wb_values["D5"] == "16"
+    assert wb_values["A6"] == "J"
+    assert wb_values["A7"] == "0"
+    assert wb_values["B7"] == "1"
+    assert wb_values["C7"] == "2"
+    assert wb_values["D7"] == "000A"
+    assert wb_values["E7"] == "14"
+    assert wb_values["A8"] == "2"
+    assert wb_values["D8"] == "23"
+    assert wb_values["E8"] == "002D"
+    assert wb_values["A9"] == "Q"
+    assert dimension is not None and dimension.attrib["ref"] == "A2:E9"
+
+
 def _build_minimal_xlsm_template(path: Path) -> None:
     workbook_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
