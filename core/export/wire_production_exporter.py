@@ -83,6 +83,7 @@ class WireProductionExporter:
                 template,
                 xlsm_path,
                 sheet_name=xlsm_sheet_name,
+                wb1_output_name=f"{base_name}.WB1",
             )
 
         return WireProductionExportResult(

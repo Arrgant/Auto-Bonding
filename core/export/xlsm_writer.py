@@ -8,6 +8,7 @@ from tempfile import NamedTemporaryFile
 from zipfile import ZIP_DEFLATED, ZipFile
 import xml.etree.ElementTree as ET
 
+from .wb1_writer import WB1Writer
 from .wire_models import OrderedWireRecord
 from .wire_recipe_models import WireRecipeTemplate
 
@@ -39,6 +40,9 @@ COORDINATE_HEADERS = (
 class XLSMWriter:
     """Copy one macro-enabled workbook template and append a safe export sheet."""
 
+    def __init__(self):
+        self._wb1_writer = WB1Writer()
+
     def write(
         self,
         ordered_wires: list[OrderedWireRecord],
@@ -46,6 +50,7 @@ class XLSMWriter:
         output_path: str | Path,
         *,
         sheet_name: str = "AUTO_WIRE_EXPORT",
+        wb1_output_name: str | None = None,
     ) -> Path:
         """Write one XLSM file containing a dedicated coordinate worksheet."""
 
@@ -100,15 +105,44 @@ class XLSMWriter:
                 },
             )
 
+            wb_sheet_path = _find_sheet_path(workbook_tree, workbook_rels_tree, "WB")
             replacements = {
                 "xl/workbook.xml": _xml_bytes(workbook_tree),
                 "xl/_rels/workbook.xml.rels": _xml_bytes(workbook_rels_tree),
                 "[Content_Types].xml": _xml_bytes(content_types_tree),
                 worksheet_path: _xml_bytes(_build_coordinate_worksheet(ordered_wires)),
             }
+            wb_sheet_replacement = self._build_wb_sheet_replacement(
+                archive,
+                ordered_wires,
+                template,
+                wb_sheet_path=wb_sheet_path,
+                wb1_output_name=wb1_output_name or f"{target_path.stem}.WB1",
+            )
+            if wb_sheet_replacement is not None and wb_sheet_path is not None:
+                replacements[wb_sheet_path] = wb_sheet_replacement
             _copy_archive_with_replacements(archive, target_path, replacements)
 
         return target_path
+
+    def _build_wb_sheet_replacement(
+        self,
+        archive: ZipFile,
+        ordered_wires: list[OrderedWireRecord],
+        template: WireRecipeTemplate,
+        *,
+        wb_sheet_path: str | None,
+        wb1_output_name: str,
+    ) -> bytes | None:
+        if wb_sheet_path is None:
+            return None
+        if not template.wb1_template_path or not Path(template.wb1_template_path).exists():
+            return None
+
+        wb1_content = self._wb1_writer.render(ordered_wires, template, output_name=wb1_output_name)
+        worksheet = ET.fromstring(archive.read(wb_sheet_path))
+        _populate_wb_worksheet(worksheet, wb1_content)
+        return _xml_bytes(worksheet)
 
 
 def _build_coordinate_worksheet(ordered_wires: list[OrderedWireRecord]) -> ET.Element:
@@ -170,6 +204,50 @@ def _build_coordinate_worksheet(ordered_wires: list[OrderedWireRecord]) -> ET.El
     return worksheet
 
 
+def _populate_wb_worksheet(worksheet: ET.Element, wb1_content: str, *, start_row: int = 4) -> None:
+    sheet_data = worksheet.find(_qn(MAIN_NS, "sheetData"))
+    if sheet_data is None:
+        sheet_data = ET.SubElement(worksheet, _qn(MAIN_NS, "sheetData"))
+
+    preserved_rows = [row for row in sheet_data.findall(_qn(MAIN_NS, "row")) if int(row.attrib.get("r", "0")) < start_row]
+    preserved_max_column = 1
+    for row in preserved_rows:
+        for cell in row.findall(_qn(MAIN_NS, "c")):
+            preserved_max_column = max(preserved_max_column, _column_index_from_ref(cell.attrib.get("r", "A1")))
+    sheet_data.clear()
+    for row in preserved_rows:
+        sheet_data.append(row)
+
+    lines = [line.rstrip("\r") for line in wb1_content.splitlines() if line.strip()]
+    max_fields = preserved_max_column
+    for offset, line in enumerate(lines):
+        row_index = start_row + offset
+        row = ET.Element(_qn(MAIN_NS, "row"), {"r": str(row_index)})
+        fields = _split_wb1_tokens(line)
+        max_fields = max(max_fields, len(fields))
+        for column_index, value in enumerate(fields, start=1):
+            cell = ET.SubElement(
+                row,
+                _qn(MAIN_NS, "c"),
+                {
+                    "r": f"{_excel_column(column_index)}{row_index}",
+                    "t": "inlineStr",
+                },
+            )
+            inline_string = ET.SubElement(cell, _qn(MAIN_NS, "is"))
+            ET.SubElement(inline_string, _qn(MAIN_NS, "t")).text = value
+        sheet_data.append(row)
+
+    dimension = worksheet.find(_qn(MAIN_NS, "dimension"))
+    if dimension is None:
+        dimension = ET.Element(_qn(MAIN_NS, "dimension"))
+        worksheet.insert(0, dimension)
+
+    max_row = max([start_row + len(lines) - 1, *[int(row.attrib.get("r", "0")) for row in preserved_rows]], default=start_row)
+    min_row = min([int(row.attrib.get("r", "0")) for row in sheet_data.findall(_qn(MAIN_NS, "row"))], default=start_row)
+    dimension.set("ref", f"A{min_row}:{_excel_column(max_fields)}{max_row}")
+
+
 def _require_template_path(template: WireRecipeTemplate) -> Path:
     if not template.xlsm_template_path:
         raise ValueError("XLSM template path is not configured.")
@@ -177,6 +255,30 @@ def _require_template_path(template: WireRecipeTemplate) -> Path:
     if not path.exists():
         raise FileNotFoundError(f"XLSM template not found: {path}")
     return path
+
+
+def _find_sheet_path(
+    workbook_tree: ET.Element,
+    workbook_rels_tree: ET.Element,
+    sheet_name: str,
+) -> str | None:
+    sheets_node = workbook_tree.find(_qn(MAIN_NS, "sheets"))
+    if sheets_node is None:
+        return None
+    for sheet in sheets_node:
+        if sheet.attrib.get("name") != sheet_name:
+            continue
+        relation_id = sheet.attrib.get(_qn(REL_NS, "id"))
+        if not relation_id:
+            return None
+        for relation in workbook_rels_tree:
+            if relation.attrib.get("Id") != relation_id:
+                continue
+            target = relation.attrib.get("Target")
+            if not target:
+                return None
+            return f"xl/{target}"
+    return None
 
 
 def _copy_archive_with_replacements(
@@ -261,6 +363,23 @@ def _format_number(value: float | int) -> str:
 
 def _xml_bytes(root: ET.Element) -> bytes:
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _split_wb1_tokens(line: str) -> list[str]:
+    return [token for token in line.split(",") if token]
+
+
+def _column_index_from_ref(cell_ref: str) -> int:
+    letters = []
+    for char in cell_ref:
+        if char.isalpha():
+            letters.append(char.upper())
+        else:
+            break
+    index = 0
+    for char in letters:
+        index = index * 26 + (ord(char) - 64)
+    return max(index, 1)
 
 
 def _qn(namespace: str, local_name: str) -> str:

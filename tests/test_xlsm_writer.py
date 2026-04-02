@@ -61,6 +61,79 @@ def test_xlsm_writer_appends_coordinate_sheet_without_removing_macros(tmp_path):
     assert vba_project == b"macro-data"
 
 
+def test_xlsm_writer_populates_existing_wb_sheet_when_wb1_template_is_available(tmp_path):
+    template_path = tmp_path / "template-with-wb.xlsm"
+    _build_xlsm_template_with_wb_sheet(template_path)
+    wb1_template_path = tmp_path / "template.WB1"
+    wb1_template_path.write_text(
+        "\n".join(
+            [
+                "0000,54454D504C4154452E5742310000,",
+                "J,",
+                "0000,0000,0000,0000,",
+                "0002,0000,0000,0000,",
+                "Q",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    template = WireRecipeTemplate(
+        template_id="demo",
+        name="Demo",
+        xlsm_template_path=str(template_path),
+        wb1_template_path=str(wb1_template_path),
+        coord_scale=10.0,
+        wb1_field_map={
+            "role_code": 0,
+            "wire_seq": 1,
+            "bond_x": 2,
+            "bond_y": 3,
+        },
+    )
+    ordered_wires = [
+        OrderedWireRecord(
+            wire_id="W0001",
+            wire_seq=1,
+            group_no=2,
+            first_point_seq=1,
+            second_point_seq=2,
+            geometry=_wire_geometry("W0001", (1.0, 2.0), (3.5, 4.5)),
+        )
+    ]
+
+    output_path = tmp_path / "out.xlsm"
+    XLSMWriter().write(ordered_wires, template, output_path)
+
+    with ZipFile(output_path) as archive:
+        workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+        workbook_rels = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+        wb_target = _find_sheet_target(workbook, workbook_rels, "WB")
+        export_target = _find_sheet_target(workbook, workbook_rels, "AUTO_WIRE_EXPORT")
+        assert wb_target is not None
+        assert export_target is not None
+        wb_sheet = ET.fromstring(archive.read(wb_target))
+        rows = wb_sheet.find(f"{{{MAIN_NS}}}sheetData")
+        assert rows is not None
+        wb_values = _sheet_values(rows)
+        dimension = wb_sheet.find(f"{{{MAIN_NS}}}dimension")
+
+    assert wb_values["A2"] == "keep-header"
+    assert wb_values["A4"] == "0000"
+    assert wb_values["B4"] == "6F75742E5742310000"
+    assert wb_values["A5"] == "J"
+    assert wb_values["A6"] == "0000"
+    assert wb_values["B6"] == "0001"
+    assert wb_values["C6"] == "000A"
+    assert wb_values["D6"] == "0014"
+    assert wb_values["A7"] == "0002"
+    assert wb_values["B7"] == "0001"
+    assert wb_values["C7"] == "0023"
+    assert wb_values["D7"] == "002D"
+    assert wb_values["A8"] == "Q"
+    assert dimension is not None and dimension.attrib["ref"] == "A2:D8"
+
+
 def _build_minimal_xlsm_template(path: Path) -> None:
     workbook_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
@@ -94,6 +167,87 @@ def _build_minimal_xlsm_template(path: Path) -> None:
         archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
         archive.writestr("xl/worksheets/sheet1.xml", sheet1_xml)
         archive.writestr("xl/vbaProject.bin", b"macro-data")
+
+
+def _build_xlsm_template_with_wb_sheet(path: Path) -> None:
+    workbook_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Base" sheetId="1" r:id="rId1"/>
+    <sheet name="WB" sheetId="2" r:id="rId2"/>
+  </sheets>
+</workbook>
+"""
+    workbook_rels_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/>
+</Relationships>
+"""
+    content_types_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>
+"""
+    sheet1_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData/>
+</worksheet>
+"""
+    sheet2_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A2:B4"/>
+  <sheetData>
+    <row r="2"><c r="A2" t="inlineStr"><is><t>keep-header</t></is></c></row>
+    <row r="3"><c r="A3" t="inlineStr"><is><t>keep-meta</t></is></c></row>
+    <row r="4"><c r="A4" t="inlineStr"><is><t>old</t></is></c></row>
+  </sheetData>
+</worksheet>
+"""
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types_xml)
+        archive.writestr("xl/workbook.xml", workbook_xml)
+        archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
+        archive.writestr("xl/worksheets/sheet1.xml", sheet1_xml)
+        archive.writestr("xl/worksheets/sheet2.xml", sheet2_xml)
+        archive.writestr("xl/vbaProject.bin", b"macro-data")
+
+
+def _find_sheet_target(workbook: ET.Element, workbook_rels: ET.Element, sheet_name: str) -> str | None:
+    sheets = workbook.find(f"{{{MAIN_NS}}}sheets")
+    if sheets is None:
+        return None
+    relation_id = None
+    for sheet in sheets:
+        if sheet.attrib.get("name") == sheet_name:
+            relation_id = sheet.attrib.get(f"{{{DOC_REL_NS}}}id")
+            break
+    if relation_id is None:
+        return None
+    for rel in workbook_rels:
+        if rel.attrib.get("Id") == relation_id:
+            return f"xl/{rel.attrib['Target']}"
+    return None
+
+
+def _sheet_values(rows: ET.Element) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for row in rows.findall(f"{{{MAIN_NS}}}row"):
+        for cell in row.findall(f"{{{MAIN_NS}}}c"):
+            ref = cell.attrib["r"]
+            text_node = cell.find(f".//{{{MAIN_NS}}}t")
+            if text_node is not None:
+                values[ref] = text_node.text or ""
+                continue
+            value_node = cell.find(f"{{{MAIN_NS}}}v")
+            if value_node is not None:
+                values[ref] = value_node.text or ""
+    return values
 
 
 def _wire_geometry(wire_id: str, first_xy: tuple[float, float], second_xy: tuple[float, float]) -> WireGeometry:

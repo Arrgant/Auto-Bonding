@@ -91,7 +91,8 @@ class WireExportDialog(QDialog):
         summary = QLabel(
             "Choose a saved machine template or create a new one. "
             "WB1 export uses the sample template path plus the field mapping JSON, "
-            "while XLSM export copies the macro workbook and adds a safe coordinate sheet."
+            "while XLSM export copies the macro workbook, adds a safe coordinate sheet, "
+            "and backfills the WB input sheet when a WB1 template is also configured."
         )
         summary.setWordWrap(True)
         layout.addWidget(summary)
