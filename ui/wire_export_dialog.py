@@ -121,9 +121,19 @@ def build_wire_extraction_health_text(
         return "No wire-semantic layers are mapped yet."
 
     messages = [
-        f"Wire extraction: {audit.extracted_wire_count}/{audit.candidate_entity_count} "
-        f"candidate entities converted from {', '.join(audit.wire_layers)}."
+        f"Wire extraction: {audit.extracted_wire_count} final path(s) from "
+        f"{audit.raw_candidate_wire_count} raw path candidate(s) in "
+        f"{', '.join(audit.wire_layers)}."
     ]
+    layer_stats = [
+        f"{entity_type}={audit.wire_layer_entity_type_counts.get(entity_type, 0)}"
+        for entity_type in ("LINE", "LWPOLYLINE", "POLYLINE", "INSERT", "ARC", "SPLINE")
+    ]
+    messages.append("06_wire entity stats: " + ", ".join(layer_stats) + ".")
+    messages.append(
+        f"Pad-filtered paths: {audit.pad_filtered_wire_count}. "
+        f"Merged wire paths: {audit.pre_merge_wire_path_count}->{audit.extracted_wire_count}."
+    )
     if audit.skipped_entities:
         skipped_parts = [
             f"{reason}={count}"

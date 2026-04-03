@@ -81,12 +81,14 @@ def test_build_wire_extraction_health_text_reports_missing_and_partial_extractio
 
     text = build_wire_extraction_health_text(audit)
 
-    assert "Wire extraction: 2/3 candidate entities converted from 06_wire." in text
+    assert "Wire extraction: 1 final path(s) from 2 raw path candidate(s) in 06_wire." in text
+    assert "06_wire entity stats: LINE=2, LWPOLYLINE=0, POLYLINE=0, INSERT=0, ARC=0, SPLINE=0." in text
+    assert "Pad-filtered paths: 0. Merged wire paths: 2->1." in text
     assert "Skipped wire-layer entities: unsupported_entity_type=1." in text
     assert "Skipped examples: #1 POINT unsupported_entity_type." in text
     assert "Potential split-wire joins: 1 endpoint pair(s)." in text
-    assert "Join examples: W0001(second) <-> W0003(first) @ (1.000, 0.000) [continuous]." in text
-    assert "Merge suggestions: W0001->W0003 join_as_is reverse=none." in text
+    assert "Join examples: W0001(second) <-> W0002(first) @ (1.000, 0.000) [continuous]." in text
+    assert "Merge suggestions: W0001->W0002 join_as_is reverse=none." in text
 
 
 def test_build_wire_extraction_health_text_marks_same_role_direction_conflicts():

@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Iterable, Literal, Mapping
 
-from ..raw_dxf_types import LayerInfo, Point2D, RawArcEntity, RawEntity, RawLWPolylineEntity, RawLineEntity
+from ..dxf_sampling import expand_lwpolyline_points, sample_arc_points
+from ..raw_dxf_types import LayerInfo, Point2D, RawEntity
 from .wire_models import WireGeometry, WirePoint
 
 
 WireMergeEndpointAlignment = Literal["continuous", "same_role_conflict"]
 WireMergeAction = Literal["join_as_is", "reverse_first_then_join", "reverse_second_then_join"]
+_PAD_MAX_SIDE = 2.5
+_PAD_MAX_AREA = 4.0
+_PAD_FILTER_MAX_LENGTH = 2.0
+_PAD_DIAGONAL_MAX_LENGTH = 1.2
+_PAD_DIAGONAL_ANGLE_TOLERANCE_DEG = 5.0
+_WIRE_LAYER_ENTITY_TYPES = ("LINE", "LWPOLYLINE", "POLYLINE", "INSERT", "ARC", "SPLINE")
 
 
 @dataclass(frozen=True)
@@ -36,6 +44,24 @@ class WireExtractionAudit:
     merge_candidates: tuple["WireExtractionMergeCandidate", ...]
     extracted_counts_by_type: dict[str, int]
     skipped_counts_by_reason: dict[str, int]
+    wire_layer_entity_type_counts: dict[str, int]
+    raw_candidate_wire_count: int
+    pad_filtered_wire_count: int
+    pre_merge_wire_path_count: int
+    final_wire_paths: tuple["WireExtractionPathSummary", ...]
+
+
+@dataclass(frozen=True)
+class WireExtractionPathSummary:
+    """One final wire-path summary used by audit/debug output."""
+
+    wire_id: str
+    length: float
+    start_x: float
+    start_y: float
+    end_x: float
+    end_y: float
+    bend_count: int
 
 
 @dataclass(frozen=True)
@@ -65,6 +91,41 @@ class WireExtractionMergeProposal:
     target_endpoint_role: str
 
 
+@dataclass(frozen=True)
+class _WireRouteCandidate:
+    source_entity_indices: tuple[int, ...]
+    layer_name: str
+    source_type: str
+    points: tuple[Point2D, ...]
+
+    @property
+    def length(self) -> float:
+        return _polyline_length(self.points)
+
+    @property
+    def start_point(self) -> Point2D:
+        return self.points[0]
+
+    @property
+    def end_point(self) -> Point2D:
+        return self.points[-1]
+
+
+@dataclass(frozen=True)
+class _PadBBox:
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+
+    def contains_all_points(self, points: Iterable[Point2D], *, tolerance: float) -> bool:
+        return all(
+            self.min_x - tolerance <= point[0] <= self.max_x + tolerance
+            and self.min_y - tolerance <= point[1] <= self.max_y + tolerance
+            for point in points
+        )
+
+
 def extract_wire_geometries(
     raw_entities: list[RawEntity],
     layer_info: list[LayerInfo],
@@ -90,40 +151,86 @@ def extract_wire_geometries_with_audit(
     """Extract wire records and return a skip/extract summary for diagnostics."""
 
     wire_layers = _resolve_wire_layers(layer_info)
+    tolerance = max(float(merge_tolerance), 1e-12)
+    wire_layer_entity_type_counts = _collect_wire_layer_entity_type_counts(
+        raw_entities,
+        layer_info,
+        wire_layers,
+    )
     wires: list[WireGeometry] = []
     skipped_entities: list[WireExtractionSkippedEntity] = []
     extracted_counts_by_type: dict[str, int] = {}
     skipped_counts_by_reason: dict[str, int] = {}
+    route_candidates: list[_WireRouteCandidate] = []
+    pad_outline_bboxes: list[_PadBBox] = []
     candidate_entity_count = 0
 
     for entity_index, entity in enumerate(raw_entities):
-        layer_name = str(entity.get("layer", "0"))
+        layer_name = _entity_layer_name(entity)
         if layer_name not in wire_layers:
             continue
 
         candidate_entity_count += 1
-        wire, skip_reason = _extract_wire_geometry(entity_index, entity)
+        route_candidates.extend(
+            _collect_wire_route_candidates(
+                entity_index,
+                entity,
+                fallback_layer_name=layer_name,
+                pad_outline_bboxes=pad_outline_bboxes,
+                skipped_entities=skipped_entities,
+                skipped_counts_by_reason=skipped_counts_by_reason,
+            )
+        )
+
+    merge_candidates = _find_merge_candidates_for_routes(route_candidates, merge_tolerance=tolerance)
+    pad_bboxes = _collect_pad_bboxes(
+        route_candidates,
+        pad_outline_bboxes,
+        tolerance=tolerance,
+    )
+    filtered_candidates = _filter_pad_symbol_routes(
+        route_candidates,
+        pad_bboxes,
+        tolerance=tolerance,
+        skipped_entities=skipped_entities,
+        skipped_counts_by_reason=skipped_counts_by_reason,
+    )
+    merged_candidates = _merge_connected_route_candidates(filtered_candidates, tolerance=tolerance)
+    for candidate in filtered_candidates:
+        extracted_counts_by_type[candidate.source_type] = (
+            extracted_counts_by_type.get(candidate.source_type, 0) + 1
+        )
+    for wire_index, candidate in enumerate(merged_candidates, start=1):
+        wire = _build_wire_geometry_from_route(wire_index, candidate)
         if wire is not None:
             wires.append(wire)
-            extracted_counts_by_type[wire.source_type] = extracted_counts_by_type.get(wire.source_type, 0) + 1
-            continue
-        skipped_entity = WireExtractionSkippedEntity(
-            entity_index=entity_index,
-            layer_name=layer_name,
-            entity_type=str(entity["type"]),
-            reason=skip_reason or "unsupported_entity_type",
+
+    final_wire_paths = tuple(
+        WireExtractionPathSummary(
+            wire_id=wire.wire_id,
+            length=wire.length,
+            start_x=wire.first_point.x,
+            start_y=wire.first_point.y,
+            end_x=wire.second_point.x,
+            end_y=wire.second_point.y,
+            bend_count=max(len(wire.route_points) - 2, 0),
         )
-        skipped_entities.append(skipped_entity)
-        skipped_counts_by_reason[skipped_entity.reason] = skipped_counts_by_reason.get(skipped_entity.reason, 0) + 1
+        for wire in wires
+    )
 
     audit = WireExtractionAudit(
         wire_layers=tuple(sorted(wire_layers)),
         extracted_wire_count=len(wires),
         candidate_entity_count=candidate_entity_count,
         skipped_entities=tuple(skipped_entities),
-        merge_candidates=_find_merge_candidates(wires, merge_tolerance=merge_tolerance),
+        merge_candidates=merge_candidates,
         extracted_counts_by_type=extracted_counts_by_type,
         skipped_counts_by_reason=skipped_counts_by_reason,
+        wire_layer_entity_type_counts=wire_layer_entity_type_counts,
+        raw_candidate_wire_count=len(route_candidates),
+        pad_filtered_wire_count=len(route_candidates) - len(filtered_candidates),
+        pre_merge_wire_path_count=len(filtered_candidates),
+        final_wire_paths=final_wire_paths,
     )
     return wires, audit
 
@@ -137,73 +244,675 @@ def _resolve_wire_layers(layer_info: list[LayerInfo]) -> set[str]:
     return wire_layers
 
 
-def _extract_wire_geometry(entity_index: int, entity: RawEntity) -> tuple[WireGeometry | None, str | None]:
-    entity_type = entity["type"]
-    if entity_type == "LINE":
-        wire = _build_wire_geometry(entity_index, entity, (entity["start"], entity["end"]))
-        if wire is None:
-            return None, "zero_length_or_insufficient_points"
-        return wire, None
-    if entity_type == "ARC":
-        points = tuple(entity.get("points", []))
-        wire = _build_wire_geometry(entity_index, entity, points)
-        if wire is None:
-            return None, "zero_length_or_insufficient_points"
-        return wire, None
-    if entity_type == "LWPOLYLINE" and bool(entity.get("closed")):
-        return None, "closed_lwpolyline"
-    if entity_type == "LWPOLYLINE":
-        points = tuple(entity.get("points", []))
-        wire = _build_wire_geometry(entity_index, entity, points)
-        if wire is None:
-            return None, "zero_length_or_insufficient_points"
-        return wire, None
-    return None, "unsupported_entity_type"
+def _collect_wire_layer_entity_type_counts(
+    raw_entities: list[RawEntity],
+    layer_info: list[LayerInfo],
+    wire_layers: set[str],
+) -> dict[str, int]:
+    counts = {entity_type: 0 for entity_type in _WIRE_LAYER_ENTITY_TYPES}
+    for layer in layer_info:
+        if str(layer["name"]) not in wire_layers:
+            continue
+        for entity_type in _WIRE_LAYER_ENTITY_TYPES:
+            counts[entity_type] += int(layer.get("entity_types", {}).get(entity_type, 0))
+    if any(counts.values()):
+        return counts
+
+    for entity in raw_entities:
+        layer_name = _entity_layer_name(entity)
+        if layer_name not in wire_layers:
+            continue
+        entity_type = _entity_type_name(entity)
+        if entity_type in counts:
+            counts[entity_type] += 1
+    return counts
 
 
-def _build_wire_geometry(
+def _collect_wire_route_candidates(
     entity_index: int,
-    entity: RawLineEntity | RawArcEntity | RawLWPolylineEntity,
-    points: tuple[Point2D, ...],
-) -> WireGeometry | None:
-    if len(points) < 2:
-        return None
+    entity: Any,
+    *,
+    fallback_layer_name: str,
+    pad_outline_bboxes: list[_PadBBox],
+    skipped_entities: list[WireExtractionSkippedEntity],
+    skipped_counts_by_reason: dict[str, int],
+) -> list[_WireRouteCandidate]:
+    entity_type = _entity_type_name(entity)
+    layer_name = _entity_layer_name(entity) or fallback_layer_name
+    if layer_name == "0":
+        layer_name = fallback_layer_name
 
-    first_point_xy = (float(points[0][0]), float(points[0][1]))
-    second_point_xy = (float(points[-1][0]), float(points[-1][1]))
-    if first_point_xy == second_point_xy:
-        return None
+    if entity_type == "INSERT":
+        child_entities = tuple(_iter_insert_children(entity))
+        if not child_entities:
+            _append_skipped_entity(
+                skipped_entities,
+                skipped_counts_by_reason,
+                entity_index=entity_index,
+                layer_name=layer_name,
+                entity_type=entity_type,
+                reason="unsupported_entity_type",
+            )
+            return []
+        routes: list[_WireRouteCandidate] = []
+        for child_entity in child_entities:
+            routes.extend(
+                _collect_wire_route_candidates(
+                    entity_index,
+                    child_entity,
+                    fallback_layer_name=layer_name,
+                    pad_outline_bboxes=pad_outline_bboxes,
+                    skipped_entities=skipped_entities,
+                    skipped_counts_by_reason=skipped_counts_by_reason,
+                )
+            )
+        return routes
+
+    skip_reason, points = _extract_entity_route_points(entity)
+    if skip_reason is not None or points is None or len(points) < 2:
+        if skip_reason == "pad_outline":
+            pad_points = _extract_polyline_points(entity)
+            if _looks_like_small_pad_rect(pad_points):
+                pad_outline_bboxes.append(
+                    _PadBBox(*_route_bbox(_dedupe_closing_point(pad_points)))
+                )
+        _append_skipped_entity(
+            skipped_entities,
+            skipped_counts_by_reason,
+            entity_index=entity_index,
+            layer_name=layer_name,
+            entity_type=entity_type,
+            reason=skip_reason or "zero_length_or_insufficient_points",
+        )
+        return []
 
     route_points = tuple((float(x_value), float(y_value)) for x_value, y_value in points)
-    wire_id = f"W{entity_index + 1:04d}"
-    first_point = WirePoint(
-        point_id=f"{wire_id}-P1",
-        wire_id=wire_id,
-        role="first",
-        x=first_point_xy[0],
-        y=first_point_xy[1],
-        source_entity_index=entity_index,
+    if len(route_points) < 2 or route_points[0] == route_points[-1]:
+        _append_skipped_entity(
+            skipped_entities,
+            skipped_counts_by_reason,
+            entity_index=entity_index,
+            layer_name=layer_name,
+            entity_type=entity_type,
+            reason="zero_length_or_insufficient_points",
+        )
+        return []
+
+    return [
+        _WireRouteCandidate(
+            source_entity_indices=(entity_index,),
+            layer_name=layer_name,
+            source_type=entity_type,
+            points=route_points,
+        )
+    ]
+
+
+def _append_skipped_entity(
+    skipped_entities: list[WireExtractionSkippedEntity],
+    skipped_counts_by_reason: dict[str, int],
+    *,
+    entity_index: int,
+    layer_name: str,
+    entity_type: str,
+    reason: str,
+) -> None:
+    skipped_entities.append(
+        WireExtractionSkippedEntity(
+            entity_index=entity_index,
+            layer_name=layer_name,
+            entity_type=entity_type,
+            reason=reason,
+        )
     )
-    second_point = WirePoint(
-        point_id=f"{wire_id}-P2",
-        wire_id=wire_id,
-        role="second",
-        x=second_point_xy[0],
-        y=second_point_xy[1],
-        source_entity_index=entity_index,
+    skipped_counts_by_reason[reason] = skipped_counts_by_reason.get(reason, 0) + 1
+
+
+def _extract_entity_route_points(entity: Any) -> tuple[str | None, tuple[Point2D, ...] | None]:
+    entity_type = _entity_type_name(entity)
+    if entity_type == "LINE":
+        return None, _extract_line_points(entity)
+    if entity_type == "ARC":
+        arc_points = _extract_arc_points(entity)
+        if len(arc_points) < 2:
+            return "zero_length_or_insufficient_points", None
+        return None, arc_points
+    if entity_type in {"LWPOLYLINE", "POLYLINE"}:
+        polyline_points = _extract_polyline_points(entity)
+        if _entity_closed(entity):
+            if _looks_like_small_pad_rect(polyline_points):
+                return "pad_outline", None
+            return "closed_lwpolyline", None
+        return None, polyline_points
+    return "unsupported_entity_type", None
+
+
+def _entity_type_name(entity: Any) -> str:
+    if isinstance(entity, Mapping):
+        return str(entity.get("type", "UNKNOWN"))
+    if hasattr(entity, "dxftype"):
+        return str(entity.dxftype())
+    return str(type(entity).__name__)
+
+
+def _entity_layer_name(entity: Any) -> str:
+    if isinstance(entity, Mapping):
+        return str(entity.get("layer", "0"))
+    dxf_attribs = getattr(entity, "dxf", None)
+    return str(getattr(dxf_attribs, "layer", "0"))
+
+
+def _entity_closed(entity: Any) -> bool:
+    if isinstance(entity, Mapping):
+        return bool(entity.get("closed"))
+    return bool(getattr(entity, "closed", False))
+
+
+def _iter_insert_children(entity: Any) -> Iterable[Any]:
+    if isinstance(entity, Mapping):
+        return tuple(entity.get("entities", []))
+    if hasattr(entity, "virtual_entities"):
+        return tuple(entity.virtual_entities())
+    return ()
+
+
+def _extract_line_points(entity: Any) -> tuple[Point2D, ...]:
+    if isinstance(entity, Mapping):
+        start = entity["start"]
+        end = entity["end"]
+        return ((float(start[0]), float(start[1])), (float(end[0]), float(end[1])))
+    start = entity.dxf.start
+    end = entity.dxf.end
+    return ((float(start.x), float(start.y)), (float(end.x), float(end.y)))
+
+
+def _extract_arc_points(entity: Any) -> tuple[Point2D, ...]:
+    if isinstance(entity, Mapping):
+        return tuple((float(x_value), float(y_value)) for x_value, y_value in entity.get("points", []))
+    return tuple(
+        sample_arc_points(
+            float(entity.dxf.center.x),
+            float(entity.dxf.center.y),
+            float(entity.dxf.radius),
+            float(entity.dxf.start_angle),
+            float(entity.dxf.end_angle),
+        )
     )
 
+
+def _extract_polyline_points(entity: Any) -> tuple[Point2D, ...]:
+    if isinstance(entity, Mapping):
+        return tuple((float(x_value), float(y_value)) for x_value, y_value in entity.get("points", []))
+    if _entity_type_name(entity) == "LWPOLYLINE":
+        return tuple((float(x_value), float(y_value)) for x_value, y_value in expand_lwpolyline_points(entity))
+    vertices = getattr(entity, "vertices", None)
+    if vertices is not None:
+        return tuple(
+            (float(vertex.dxf.location.x), float(vertex.dxf.location.y))
+            for vertex in vertices
+        )
+    if hasattr(entity, "points"):
+        return tuple((float(point[0]), float(point[1])) for point in entity.points())
+    return ()
+
+
+def _collect_pad_bboxes(
+    route_candidates: list[_WireRouteCandidate],
+    pad_outline_bboxes: list[_PadBBox],
+    *,
+    tolerance: float,
+) -> tuple[_PadBBox, ...]:
+    pad_bboxes: list[_PadBBox] = list(pad_outline_bboxes)
+    axis_aligned_short_routes: list[_WireRouteCandidate] = []
+    for route in route_candidates:
+        if _looks_like_small_pad_rect(route.points):
+            pad_bboxes.append(_PadBBox(*_route_bbox(_dedupe_closing_point(route.points))))
+        if (
+            len(route.points) == 2
+            and route.length <= _PAD_MAX_SIDE
+            and _is_axis_aligned_segment(route.start_point, route.end_point, tolerance=tolerance)
+        ):
+            axis_aligned_short_routes.append(route)
+    pad_bboxes.extend(_find_small_rectangles_from_edges(axis_aligned_short_routes, tolerance=tolerance))
+    return tuple(_dedupe_pad_bboxes(pad_bboxes, tolerance=tolerance))
+
+
+def _filter_pad_symbol_routes(
+    route_candidates: list[_WireRouteCandidate],
+    pad_bboxes: tuple[_PadBBox, ...],
+    *,
+    tolerance: float,
+    skipped_entities: list[WireExtractionSkippedEntity],
+    skipped_counts_by_reason: dict[str, int],
+) -> list[_WireRouteCandidate]:
+    filtered_routes: list[_WireRouteCandidate] = []
+    for route in route_candidates:
+        skip_reason = _pad_symbol_filter_reason(route, pad_bboxes, tolerance=tolerance)
+        if skip_reason is None:
+            filtered_routes.append(route)
+            continue
+        _append_skipped_entity(
+            skipped_entities,
+            skipped_counts_by_reason,
+            entity_index=route.source_entity_indices[0],
+            layer_name=route.layer_name,
+            entity_type=route.source_type,
+            reason=skip_reason,
+        )
+    return filtered_routes
+
+
+def _pad_symbol_filter_reason(
+    route: _WireRouteCandidate,
+    pad_bboxes: tuple[_PadBBox, ...],
+    *,
+    tolerance: float,
+) -> str | None:
+    if _looks_like_small_pad_rect(route.points):
+        return "pad_outline"
+    if route.length > _PAD_FILTER_MAX_LENGTH:
+        return None
+    if _route_inside_one_pad_bbox(route.points, pad_bboxes, tolerance=tolerance):
+        return "pad_internal_short_line"
+    if len(route.points) == 2 and route.length <= _PAD_DIAGONAL_MAX_LENGTH and _is_short_pad_diagonal(
+        route.start_point,
+        route.end_point,
+    ):
+        return "pad_diagonal_short_line"
+    return None
+
+
+def _route_inside_one_pad_bbox(
+    points: tuple[Point2D, ...],
+    pad_bboxes: tuple[_PadBBox, ...],
+    *,
+    tolerance: float,
+) -> bool:
+    return any(bbox.contains_all_points(points, tolerance=tolerance) for bbox in pad_bboxes)
+
+
+def _looks_like_small_pad_rect(points: tuple[Point2D, ...]) -> bool:
+    rect_points = tuple(dict.fromkeys(_dedupe_closing_point(points)))
+    if len(rect_points) != 4:
+        return False
+    min_x, min_y, max_x, max_y = _route_bbox(rect_points)
+    width = max_x - min_x
+    height = max_y - min_y
+    if width <= 0.0 or height <= 0.0:
+        return False
+    if max(width, height) > _PAD_MAX_SIDE or width * height > _PAD_MAX_AREA:
+        return False
+    return _looks_like_small_rotated_rect(rect_points)
+
+
+def _looks_like_small_rotated_rect(points: tuple[Point2D, ...]) -> bool:
+    if len(points) != 4:
+        return False
+    center_x = sum(point[0] for point in points) / 4.0
+    center_y = sum(point[1] for point in points) / 4.0
+    ordered_points = tuple(
+        sorted(
+            points,
+            key=lambda point: math.atan2(point[1] - center_y, point[0] - center_x),
+        )
+    )
+    closed_points = ordered_points + (ordered_points[0],)
+    vectors = [
+        (
+            end_point[0] - start_point[0],
+            end_point[1] - start_point[1],
+        )
+        for start_point, end_point in zip(closed_points, closed_points[1:])
+    ]
+    lengths = [math.hypot(delta_x, delta_y) for delta_x, delta_y in vectors]
+    if any(length <= 1e-9 or length > _PAD_MAX_SIDE for length in lengths):
+        return False
+    if not _lengths_close(lengths[0], lengths[2]) or not _lengths_close(lengths[1], lengths[3]):
+        return False
+    for index in range(4):
+        first_vector = vectors[index]
+        second_vector = vectors[(index + 1) % 4]
+        if not _vectors_nearly_perpendicular(first_vector, second_vector):
+            return False
+    return _polygon_area(ordered_points) <= _PAD_MAX_AREA
+
+
+def _lengths_close(first_length: float, second_length: float) -> bool:
+    scale = max(first_length, second_length, 1.0)
+    return abs(first_length - second_length) <= scale * 0.15
+
+
+def _vectors_nearly_perpendicular(
+    first_vector: Point2D,
+    second_vector: Point2D,
+) -> bool:
+    first_length = math.hypot(first_vector[0], first_vector[1])
+    second_length = math.hypot(second_vector[0], second_vector[1])
+    if first_length <= 1e-9 or second_length <= 1e-9:
+        return False
+    cosine = abs(
+        (
+            first_vector[0] * second_vector[0]
+            + first_vector[1] * second_vector[1]
+        )
+        / (first_length * second_length)
+    )
+    return cosine <= 0.25
+
+
+def _polygon_area(points: tuple[Point2D, ...]) -> float:
+    area = 0.0
+    closed_points = points + (points[0],)
+    for start_point, end_point in zip(closed_points, closed_points[1:]):
+        area += start_point[0] * end_point[1] - end_point[0] * start_point[1]
+    return abs(area) / 2.0
+
+
+def _find_small_rectangles_from_edges(
+    axis_aligned_short_routes: list[_WireRouteCandidate],
+    *,
+    tolerance: float,
+) -> tuple[_PadBBox, ...]:
+    if not axis_aligned_short_routes:
+        return ()
+
+    node_routes: dict[tuple[str, int, int], list[int]] = defaultdict(list)
+    route_nodes: list[tuple[tuple[str, int, int], tuple[str, int, int]]] = []
+    for route_index, route in enumerate(axis_aligned_short_routes):
+        first_node = _endpoint_key(route.layer_name, route.start_point, tolerance=tolerance)
+        second_node = _endpoint_key(route.layer_name, route.end_point, tolerance=tolerance)
+        route_nodes.append((first_node, second_node))
+        node_routes[first_node].append(route_index)
+        node_routes[second_node].append(route_index)
+
+    visited_routes: set[int] = set()
+    pad_bboxes: list[_PadBBox] = []
+    for route_index in range(len(axis_aligned_short_routes)):
+        if route_index in visited_routes:
+            continue
+        component_routes, component_nodes = _collect_route_component(
+            route_index,
+            route_nodes,
+            node_routes,
+            visited_routes,
+        )
+        if len(component_nodes) != 4:
+            continue
+        unique_edges = {
+            tuple(sorted(route_nodes[candidate_index]))
+            for candidate_index in component_routes
+            if route_nodes[candidate_index][0] != route_nodes[candidate_index][1]
+        }
+        if len(unique_edges) != 4:
+            continue
+        node_edge_count: dict[tuple[str, int, int], int] = {}
+        for first_node, second_node in unique_edges:
+            node_edge_count[first_node] = node_edge_count.get(first_node, 0) + 1
+            node_edge_count[second_node] = node_edge_count.get(second_node, 0) + 1
+        if any(node_edge_count.get(node, 0) != 2 for node in component_nodes):
+            continue
+        component_points = tuple(
+            point
+            for candidate_index in component_routes
+            for point in (
+                axis_aligned_short_routes[candidate_index].start_point,
+                axis_aligned_short_routes[candidate_index].end_point,
+            )
+        )
+        bbox = _PadBBox(*_route_bbox(component_points))
+        width = bbox.max_x - bbox.min_x
+        height = bbox.max_y - bbox.min_y
+        if width <= 0.0 or height <= 0.0:
+            continue
+        if max(width, height) > _PAD_MAX_SIDE or width * height > _PAD_MAX_AREA:
+            continue
+        pad_bboxes.append(bbox)
+    return tuple(pad_bboxes)
+
+
+def _collect_route_component(
+    start_route_index: int,
+    route_nodes: list[tuple[tuple[str, int, int], tuple[str, int, int]]],
+    node_routes: dict[tuple[str, int, int], list[int]],
+    visited_routes: set[int],
+) -> tuple[set[int], set[tuple[str, int, int]]]:
+    stack = [start_route_index]
+    component_routes: set[int] = set()
+    component_nodes: set[tuple[str, int, int]] = set()
+    while stack:
+        route_index = stack.pop()
+        if route_index in visited_routes:
+            continue
+        visited_routes.add(route_index)
+        component_routes.add(route_index)
+        for node in route_nodes[route_index]:
+            component_nodes.add(node)
+            stack.extend(node_routes[node])
+    return component_routes, component_nodes
+
+
+def _dedupe_pad_bboxes(
+    pad_bboxes: list[_PadBBox],
+    *,
+    tolerance: float,
+) -> list[_PadBBox]:
+    deduped: dict[tuple[int, int, int, int], _PadBBox] = {}
+    for bbox in pad_bboxes:
+        key = (
+            int(round(bbox.min_x / tolerance)),
+            int(round(bbox.min_y / tolerance)),
+            int(round(bbox.max_x / tolerance)),
+            int(round(bbox.max_y / tolerance)),
+        )
+        deduped[key] = bbox
+    return list(deduped.values())
+
+
+def _is_axis_aligned_segment(
+    first_point: Point2D,
+    second_point: Point2D,
+    *,
+    tolerance: float,
+) -> bool:
+    return (
+        abs(first_point[0] - second_point[0]) <= tolerance
+        or abs(first_point[1] - second_point[1]) <= tolerance
+    )
+
+
+def _is_short_pad_diagonal(first_point: Point2D, second_point: Point2D) -> bool:
+    delta_x = second_point[0] - first_point[0]
+    delta_y = second_point[1] - first_point[1]
+    if delta_x == 0.0 or delta_y == 0.0:
+        return False
+    angle = abs(math.degrees(math.atan2(delta_y, delta_x))) % 180.0
+    return (
+        abs(angle - 45.0) <= _PAD_DIAGONAL_ANGLE_TOLERANCE_DEG
+        or abs(angle - 135.0) <= _PAD_DIAGONAL_ANGLE_TOLERANCE_DEG
+    )
+
+
+def _merge_connected_route_candidates(
+    route_candidates: list[_WireRouteCandidate],
+    *,
+    tolerance: float,
+) -> list[_WireRouteCandidate]:
+    if not route_candidates:
+        return []
+
+    node_routes: dict[tuple[str, int, int], list[int]] = defaultdict(list)
+    route_nodes: list[tuple[tuple[str, int, int], tuple[str, int, int]]] = []
+    for route_index, route in enumerate(route_candidates):
+        first_node = _endpoint_key(route.layer_name, route.start_point, tolerance=tolerance)
+        second_node = _endpoint_key(route.layer_name, route.end_point, tolerance=tolerance)
+        route_nodes.append((first_node, second_node))
+        node_routes[first_node].append(route_index)
+        node_routes[second_node].append(route_index)
+
+    merged_routes: list[_WireRouteCandidate] = []
+    visited_routes: set[int] = set()
+    for route_index in sorted(
+        range(len(route_candidates)),
+        key=lambda index: (
+            min(route_candidates[index].source_entity_indices),
+            route_candidates[index].start_point,
+            route_candidates[index].end_point,
+        ),
+    ):
+        if route_index in visited_routes:
+            continue
+        start_node = _route_chain_start_node(route_index, route_nodes, node_routes)
+        merged_routes.append(
+            _trace_merged_route(
+                route_index,
+                start_node,
+                route_candidates,
+                route_nodes,
+                node_routes,
+                visited_routes,
+            )
+        )
+    return merged_routes
+
+
+def _route_chain_start_node(
+    route_index: int,
+    route_nodes: list[tuple[tuple[str, int, int], tuple[str, int, int]]],
+    node_routes: dict[tuple[str, int, int], list[int]],
+) -> tuple[str, int, int]:
+    first_node, second_node = route_nodes[route_index]
+    if len(node_routes[first_node]) != 2:
+        return first_node
+    if len(node_routes[second_node]) != 2:
+        return second_node
+    return first_node
+
+
+def _trace_merged_route(
+    start_route_index: int,
+    start_node: tuple[str, int, int],
+    route_candidates: list[_WireRouteCandidate],
+    route_nodes: list[tuple[tuple[str, int, int], tuple[str, int, int]]],
+    node_routes: dict[tuple[str, int, int], list[int]],
+    visited_routes: set[int],
+) -> _WireRouteCandidate:
+    route_index = start_route_index
+    current_node = start_node
+    merged_points: list[Point2D] = []
+    source_indices: list[int] = []
+    source_types: list[str] = []
+    layer_name = route_candidates[start_route_index].layer_name
+
+    while True:
+        route = route_candidates[route_index]
+        first_node, second_node = route_nodes[route_index]
+        oriented_points = (
+            list(route.points)
+            if current_node == first_node
+            else list(reversed(route.points))
+        )
+        if merged_points:
+            merged_points.extend(oriented_points[1:])
+        else:
+            merged_points.extend(oriented_points)
+        source_indices.extend(route.source_entity_indices)
+        source_types.append(route.source_type)
+        visited_routes.add(route_index)
+
+        next_node = second_node if current_node == first_node else first_node
+        next_route_index = _next_merge_route_index(route_index, next_node, route_nodes, node_routes, visited_routes)
+        if next_route_index is None:
+            break
+        route_index = next_route_index
+        current_node = next_node
+
+    source_type = source_types[0] if len(set(source_types)) == 1 else "MERGED_PATH"
+    return _WireRouteCandidate(
+        source_entity_indices=tuple(dict.fromkeys(source_indices)),
+        layer_name=layer_name,
+        source_type=source_type,
+        points=tuple(_dedupe_neighbor_points(merged_points)),
+    )
+
+
+def _next_merge_route_index(
+    current_route_index: int,
+    shared_node: tuple[str, int, int],
+    route_nodes: list[tuple[tuple[str, int, int], tuple[str, int, int]]],
+    node_routes: dict[tuple[str, int, int], list[int]],
+    visited_routes: set[int],
+) -> int | None:
+    if len(node_routes[shared_node]) != 2:
+        return None
+    route_ids = [
+        route_index
+        for route_index in node_routes[shared_node]
+        if route_index != current_route_index and route_index not in visited_routes
+    ]
+    if len(route_ids) != 1:
+        return None
+    return route_ids[0]
+
+
+def _find_merge_candidates_for_routes(
+    route_candidates: list[_WireRouteCandidate],
+    *,
+    merge_tolerance: float,
+) -> tuple[WireExtractionMergeCandidate, ...]:
+    temporary_wires = [
+        _build_wire_geometry_from_route(route_index + 1, route)
+        for route_index, route in enumerate(route_candidates)
+    ]
+    return _find_merge_candidates(temporary_wires, merge_tolerance=merge_tolerance)
+
+
+def _endpoint_key(
+    layer_name: str,
+    point: Point2D,
+    *,
+    tolerance: float,
+) -> tuple[str, int, int]:
+    return (
+        layer_name,
+        int(round(point[0] / tolerance)),
+        int(round(point[1] / tolerance)),
+    )
+
+
+def _build_wire_geometry_from_route(
+    wire_number: int,
+    route: _WireRouteCandidate,
+) -> WireGeometry | None:
+    if len(route.points) < 2 or route.points[0] == route.points[-1]:
+        return None
+    first_point_xy = route.start_point
+    second_point_xy = route.end_point
+    wire_id = f"W{wire_number:04d}"
     return WireGeometry(
         wire_id=wire_id,
-        layer_name=str(entity.get("layer", "0")),
-        source_type=entity["type"],
-        source_entity_indices=(entity_index,),
-        route_points=route_points,
-        first_point=first_point,
-        second_point=second_point,
-        length=_polyline_length(route_points),
+        layer_name=route.layer_name,
+        source_type=route.source_type,
+        source_entity_indices=route.source_entity_indices,
+        route_points=route.points,
+        first_point=WirePoint(
+            point_id=f"{wire_id}-P1",
+            wire_id=wire_id,
+            role="first",
+            x=first_point_xy[0],
+            y=first_point_xy[1],
+            source_entity_index=min(route.source_entity_indices),
+        ),
+        second_point=WirePoint(
+            point_id=f"{wire_id}-P2",
+            wire_id=wire_id,
+            role="second",
+            x=second_point_xy[0],
+            y=second_point_xy[1],
+            source_entity_index=max(route.source_entity_indices),
+        ),
+        length=_polyline_length(route.points),
         angle_deg=_wire_angle(first_point_xy, second_point_xy),
-        bbox=_route_bbox(route_points),
+        bbox=_route_bbox(route.points),
     )
 
 
@@ -224,6 +933,28 @@ def _route_bbox(points: tuple[Point2D, ...]) -> tuple[float, float, float, float
     x_values = [point[0] for point in points]
     y_values = [point[1] for point in points]
     return (min(x_values), min(y_values), max(x_values), max(y_values))
+
+
+def _dedupe_closing_point(points: tuple[Point2D, ...]) -> tuple[Point2D, ...]:
+    if len(points) >= 2 and points[0] == points[-1]:
+        return points[:-1]
+    return points
+
+
+def _dedupe_neighbor_points(points: list[Point2D]) -> list[Point2D]:
+    deduped: list[Point2D] = []
+    for point in points:
+        if deduped and point == deduped[-1]:
+            continue
+        deduped.append(point)
+    return deduped
+
+
+def _count_candidate_types(route_candidates: list[_WireRouteCandidate]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for route in route_candidates:
+        counts[route.source_type] = counts.get(route.source_type, 0) + 1
+    return counts
 
 
 def _find_merge_candidates(
@@ -277,10 +1008,26 @@ def format_wire_extraction_audit_report(audit: WireExtractionAudit) -> str:
     lines = [
         "Wire Extraction Audit",
         f"Wire layers: {', '.join(audit.wire_layers) if audit.wire_layers else '(none)'}",
-        f"Converted entities: {audit.extracted_wire_count}/{audit.candidate_entity_count}",
+        "06_wire entity stats:",
+    ]
+    for entity_type in _WIRE_LAYER_ENTITY_TYPES:
+        lines.append(f"- {entity_type}: {audit.wire_layer_entity_type_counts.get(entity_type, 0)}")
+
+    lines.extend(
+        [
+            "",
+            f"Top-level candidate entities: {audit.candidate_entity_count}",
+            f"Raw candidate wire paths: {audit.raw_candidate_wire_count}",
+            f"Pad-symbol filtered paths: {audit.pad_filtered_wire_count}",
+            f"Merged wire paths: {audit.pre_merge_wire_path_count} -> {audit.extracted_wire_count}",
+        ]
+    )
+    lines.extend(
+        [
         "",
         "Extracted entity types:",
-    ]
+        ]
+    )
     if audit.extracted_counts_by_type:
         for entity_type, count in sorted(audit.extracted_counts_by_type.items()):
             lines.append(f"- {entity_type}: {count}")
@@ -299,7 +1046,7 @@ def format_wire_extraction_audit_report(audit: WireExtractionAudit) -> str:
     else:
         lines.append("- none")
 
-    lines.extend(["", "Potential split-wire joins:"])
+    lines.extend(["", "Potential split-wire joins before merge:"])
     if audit.merge_candidates:
         for item in sorted(
             audit.merge_candidates,
@@ -333,6 +1080,18 @@ def format_wire_extraction_audit_report(audit: WireExtractionAudit) -> str:
                 f"- {proposal.source_wire_id} -> {proposal.target_wire_id} "
                 f"@ ({proposal.shared_x:.6f}, {proposal.shared_y:.6f}) "
                 f"action={proposal.action} reverse={reverse_text}"
+            )
+    else:
+        lines.append("- none")
+
+    lines.extend(["", "Final wire paths:"])
+    if audit.final_wire_paths:
+        for item in audit.final_wire_paths:
+            lines.append(
+                f"- {item.wire_id}: length={item.length:.6f} "
+                f"start=({item.start_x:.6f}, {item.start_y:.6f}) "
+                f"end=({item.end_x:.6f}, {item.end_y:.6f}) "
+                f"bend_count={item.bend_count}"
             )
     else:
         lines.append("- none")
@@ -433,6 +1192,7 @@ __all__ = [
     "WireExtractionAudit",
     "WireExtractionMergeCandidate",
     "WireExtractionMergeProposal",
+    "WireExtractionPathSummary",
     "WireExtractionSkippedEntity",
     "WireMergeAction",
     "WireMergeEndpointAlignment",
