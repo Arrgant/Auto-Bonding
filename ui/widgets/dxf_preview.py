@@ -28,11 +28,16 @@ SOURCE_INDICES_ROLE = 4
 class DXFPreviewView(QGraphicsView):
     """2D DXF preview area with layer ordering and entity selection."""
 
+    _DEFAULT_CONTENT_RECT = QRectF(-400.0, -300.0, 800.0, 600.0)
+    _CANVAS_PADDING_RATIO = 8.0
+    _MIN_CANVAS_PADDING = 2400.0
+
     def __init__(self):
         super().__init__()
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
-        self._scene_rect = QRectF(-400.0, -300.0, 800.0, 600.0)
+        self._content_rect = QRectF(self._DEFAULT_CONTENT_RECT)
+        self._scene_rect = self._build_canvas_rect(self._content_rect)
         self._has_content = False
         self._item_styles: dict[QGraphicsItem, dict[str, Any]] = {}
         self._selection_override: int | None = None
@@ -41,6 +46,13 @@ class DXFPreviewView(QGraphicsView):
         self._current_document: ProjectDocument | None = None
         self._focused_layer_name: str | None = None
         self._selected_entity_index: int | None = None
+        self._current_zoom = 1.0
+        self._min_zoom = 0.45
+        self._max_zoom = 8.0
+        self._is_panning = False
+        self._pan_button: Qt.MouseButton | None = None
+        self._last_pan_position = QPointF()
+        self._user_view_adjusted = False
 
         self.file_drop_handler: Callable[[Path], None] | None = None
         self.import_requested_handler: Callable[[], None] | None = None
@@ -52,6 +64,12 @@ class DXFPreviewView(QGraphicsView):
         self.setBackgroundBrush(QColor("#161616"))
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scene.setSceneRect(self._scene_rect)
 
         self.placeholder = ViewerPlaceholder(
             "2D Preview",
@@ -81,10 +99,12 @@ class DXFPreviewView(QGraphicsView):
         if document is None or not document.raw_entities:
             self._focused_layer_name = None
             self._selected_entity_index = None
+            self._content_rect = QRectF(self._DEFAULT_CONTENT_RECT)
             self.placeholder.set_content("2D Preview", "Import a DXF or drop it here.")
             self.placeholder.set_action("Import DXF")
+            self._scene_rect = self._build_canvas_rect(self._content_rect)
             self._scene.setSceneRect(self._scene_rect)
-            self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+            self._reset_view_to_scene()
             self.placeholder.show()
             self.focus_banner.hide()
             self._position_placeholder()
@@ -115,9 +135,10 @@ class DXFPreviewView(QGraphicsView):
             if item is not None:
                 rendered_count += 1
 
-        self._scene_rect = QRectF(*document.scene_rect)
+        self._content_rect = self._normalize_content_rect(QRectF(*document.scene_rect))
+        self._scene_rect = self._build_canvas_rect(self._content_rect)
         self._scene.setSceneRect(self._scene_rect)
-        self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._reset_view_to_scene()
         self._has_content = rendered_count > 0
         if rendered_count <= 0:
             self._focused_layer_name = None
@@ -138,25 +159,75 @@ class DXFPreviewView(QGraphicsView):
 
     def resizeEvent(self, event) -> None:  # pragma: no cover
         super().resizeEvent(event)
-        if self._has_content:
-            self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        if self._has_content and not self._user_view_adjusted:
+            self._fit_scene_to_view()
         self._position_placeholder()
         self._position_focus_banner()
 
     def mousePressEvent(self, event) -> None:  # pragma: no cover
+        if not self._has_content:
+            super().mousePressEvent(event)
+            return
+
+        hit_item = self.itemAt(event.position().toPoint())
+        should_pan = event.button() == Qt.MouseButton.MiddleButton or (
+            event.button() == Qt.MouseButton.LeftButton and hit_item is None
+        )
+        if should_pan:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._scene.clearSelection()
+            self._begin_pan(event.button(), event.position())
+            event.accept()
+            return
+
         super().mousePressEvent(event)
 
-        if event.button() != Qt.MouseButton.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton or hit_item is None:
             return
 
-        item = self.itemAt(event.position().toPoint())
-        if item is None:
-            return
-
-        if bool(item.data(ENTITY_CLOSED_ROLE)) and self.closed_shape_click_handler is not None:
-            entity_index = item.data(ENTITY_INDEX_ROLE)
+        if bool(hit_item.data(ENTITY_CLOSED_ROLE)) and self.closed_shape_click_handler is not None:
+            entity_index = hit_item.data(ENTITY_INDEX_ROLE)
             if isinstance(entity_index, int):
                 self.closed_shape_click_handler(entity_index)
+
+    def mouseMoveEvent(self, event) -> None:  # pragma: no cover
+        if self._is_panning:
+            delta = event.position() - self._last_pan_position
+            self._last_pan_position = event.position()
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - int(delta.x()))
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - int(delta.y()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # pragma: no cover
+        if self._is_panning and event.button() == self._pan_button:
+            self._end_pan()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def wheelEvent(self, event) -> None:  # pragma: no cover
+        if not self._has_content or self.placeholder.isVisible():
+            super().wheelEvent(event)
+            return
+
+        angle_delta = event.angleDelta().y()
+        if angle_delta == 0:
+            event.ignore()
+            return
+
+        zoom_factor = 1.18 if angle_delta > 0 else (1.0 / 1.18)
+        next_zoom = self._current_zoom * zoom_factor
+        if next_zoom < self._min_zoom or next_zoom > self._max_zoom:
+            event.accept()
+            return
+
+        self.scale(zoom_factor, zoom_factor)
+        self._current_zoom = next_zoom
+        self._user_view_adjusted = True
+        self._update_focus_banner()
+        event.accept()
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:  # pragma: no cover
         painter.fillRect(rect, QColor("#161616"))
@@ -186,6 +257,51 @@ class DXFPreviewView(QGraphicsView):
 
     def _position_focus_banner(self) -> None:
         self.focus_banner.move(14, 12)
+
+    def _fit_scene_to_view(self) -> None:
+        if self._content_rect.isNull():
+            return
+        self.fitInView(self._content_rect, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def _reset_view_to_scene(self) -> None:
+        self._end_pan()
+        self.resetTransform()
+        self._current_zoom = 1.0
+        self._user_view_adjusted = False
+        self._fit_scene_to_view()
+
+    def _begin_pan(self, button: Qt.MouseButton, position: QPointF) -> None:
+        self._is_panning = True
+        self._pan_button = button
+        self._last_pan_position = position
+        self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+        self._user_view_adjusted = True
+
+    def _end_pan(self) -> None:
+        if not self._is_panning:
+            return
+        self._is_panning = False
+        self._pan_button = None
+        self.viewport().unsetCursor()
+
+    def _normalize_content_rect(self, rect: QRectF) -> QRectF:
+        normalized = rect.normalized()
+        if normalized.width() >= 1.0 and normalized.height() >= 1.0:
+            return normalized
+
+        center = normalized.center()
+        if normalized.isNull():
+            center = self._DEFAULT_CONTENT_RECT.center()
+        return QRectF(center.x() - 400.0, center.y() - 300.0, 800.0, 600.0)
+
+    def _build_canvas_rect(self, content_rect: QRectF) -> QRectF:
+        normalized = self._normalize_content_rect(content_rect)
+        padding = max(
+            normalized.width() * self._CANVAS_PADDING_RATIO,
+            normalized.height() * self._CANVAS_PADDING_RATIO,
+            self._MIN_CANVAS_PADDING,
+        )
+        return normalized.adjusted(-padding, -padding, padding, padding)
 
     def set_import_action_enabled(self, enabled: bool) -> None:
         if not self.placeholder.action_button.isVisible():
@@ -404,6 +520,8 @@ class DXFPreviewView(QGraphicsView):
             thickness = self._current_document.layer_thicknesses.get(self._focused_layer_name)
             if thickness is not None:
                 banner_text += f" | {thickness:.3f} mm"
+        else:
+            banner_text = "Wheel to zoom | Drag empty space to pan"
 
         if not banner_text:
             self.focus_banner.hide()

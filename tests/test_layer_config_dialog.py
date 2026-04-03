@@ -120,3 +120,29 @@ def test_layer_config_dialog_bulk_actions_refresh_summary_and_payload():
     assert payload["layer_mapping_overrides"] == {}
 
     dialog.deleteLater()
+
+
+def test_layer_config_dialog_filters_rows_by_name_role_and_empty_state():
+    _app()
+    dialog = LayerConfigDialog(
+        _layer_info(),
+        enabled_layers={"01_base", "02_wire", "03_notes"},
+        layer_mapping_overrides={},
+    )
+
+    dialog.filter_input.setText("wire")
+    visible_rows = [index for index in range(dialog.table.rowCount()) if not dialog.table.isRowHidden(index)]
+    assert visible_rows == [1]
+    assert "showing 1/3" in dialog.detail_label.text()
+
+    dialog.filter_input.clear()
+    dialog.hide_empty_checkbox.setChecked(True)
+    visible_rows = [index for index in range(dialog.table.rowCount()) if not dialog.table.isRowHidden(index)]
+    assert visible_rows == [0, 1]
+
+    dialog.filter_input.setText("bond point")
+    visible_rows = [index for index in range(dialog.table.rowCount()) if not dialog.table.isRowHidden(index)]
+    assert visible_rows == []
+    assert dialog.detail_label.text().endswith("No layers match the current filter.")
+
+    dialog.deleteLater()

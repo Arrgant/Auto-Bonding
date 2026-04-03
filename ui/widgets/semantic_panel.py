@@ -8,11 +8,13 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QTabWidget,
+    QPushButton,
+    QStackedWidget,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from core.semantic import SemanticCandidate, SemanticEntity
@@ -78,16 +80,109 @@ class SemanticObjectsPanel(QFrame):
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
 
-        self.tabs = QTabWidget(self)
+        self.content_stack = QStackedWidget(self)
+
+        self.overview_page = QWidget(self)
+        overview_layout = QVBoxLayout(self.overview_page)
+        overview_layout.setContentsMargins(0, 0, 0, 0)
+        overview_layout.setSpacing(10)
+
+        self.overview_hint = QLabel("Recognized objects and review items will appear here after import.")
+        self.overview_hint.setObjectName("MutedLabel")
+        self.overview_hint.setWordWrap(True)
+        overview_layout.addWidget(self.overview_hint)
+
+        self.review_callout = QFrame(self.overview_page)
+        self.review_callout.setFrameShape(QFrame.Shape.NoFrame)
+        review_callout_layout = QHBoxLayout(self.review_callout)
+        review_callout_layout.setContentsMargins(0, 0, 0, 0)
+        review_callout_layout.setSpacing(8)
+
+        self.review_hint_badge = QLabel("Review Queue")
+        self.review_hint_badge.setObjectName("SectionBadge")
+        review_callout_layout.addWidget(self.review_hint_badge, alignment=Qt.AlignmentFlag.AlignTop)
+
+        self.review_hint_label = QLabel("Items that need a manual confirmation will appear here.")
+        self.review_hint_label.setObjectName("MutedLabel")
+        self.review_hint_label.setWordWrap(True)
+        review_callout_layout.addWidget(self.review_hint_label, stretch=1)
+
+        self.review_callout.hide()
+        overview_layout.addWidget(self.review_callout)
+
+        overview_actions = QHBoxLayout()
+        overview_actions.setContentsMargins(0, 0, 0, 0)
+        overview_actions.setSpacing(8)
+
+        self.open_objects_button = QPushButton("Browse Objects", self.overview_page)
+        self.open_objects_button.setObjectName("SecondaryButton")
+        self.open_objects_button.clicked.connect(lambda: self._open_detail_view("objects"))
+        overview_actions.addWidget(self.open_objects_button)
+
+        self.open_review_button = QPushButton("Open Review", self.overview_page)
+        self.open_review_button.setObjectName("SecondaryButton")
+        self.open_review_button.clicked.connect(lambda: self._open_detail_view("review"))
+        overview_actions.addWidget(self.open_review_button)
+        overview_actions.addStretch(1)
+        overview_layout.addLayout(overview_actions)
+
+        self.detail_page = QWidget(self)
+        detail_layout = QVBoxLayout(self.detail_page)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.setSpacing(10)
+
+        detail_header_row = QHBoxLayout()
+        detail_header_row.setContentsMargins(0, 0, 0, 0)
+        detail_header_row.setSpacing(8)
+
+        self.detail_title = QLabel("Recognized objects")
+        self.detail_title.setObjectName("SectionTitle")
+        detail_header_row.addWidget(self.detail_title)
+        detail_header_row.addStretch(1)
+
+        self.back_to_overview_button = QToolButton(self.detail_page)
+        self.back_to_overview_button.setObjectName("SecondaryButton")
+        self.back_to_overview_button.setText("Overview")
+        self.back_to_overview_button.setToolTip("Return to the recognition summary")
+        self.back_to_overview_button.clicked.connect(self._show_overview)
+        detail_header_row.addWidget(self.back_to_overview_button)
+        detail_layout.addLayout(detail_header_row)
+
+        self.detail_hint = QLabel("Select one item to inspect it in the 2D preview.")
+        self.detail_hint.setObjectName("MutedLabel")
+        self.detail_hint.setWordWrap(True)
+        detail_layout.addWidget(self.detail_hint)
+
+        mode_row = QHBoxLayout()
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        mode_row.setSpacing(8)
+
+        self.object_mode_button = self._build_mode_button(self.detail_page)
+        self.object_mode_button.clicked.connect(lambda: self._set_active_view("objects"))
+        mode_row.addWidget(self.object_mode_button)
+
+        self.review_mode_button = self._build_mode_button(self.detail_page)
+        self.review_mode_button.clicked.connect(lambda: self._set_active_view("review"))
+        mode_row.addWidget(self.review_mode_button)
+        mode_row.addStretch(1)
+        detail_layout.addLayout(mode_row)
+
+        self.mode_stack = QStackedWidget(self)
         self.object_tree = self._build_tree()
         self.review_tree = self._build_tree()
-        self.tabs.addTab(self.object_tree, "Objects")
-        self.tabs.addTab(self.review_tree, "Confirm")
-        layout.addWidget(self.tabs, stretch=1)
+        self.review_tree.setHeaderLabels(["Review", "Layer"])
+        self.mode_stack.addWidget(self.object_tree)
+        self.mode_stack.addWidget(self.review_tree)
+        detail_layout.addWidget(self.mode_stack, stretch=1)
+
+        self.content_stack.addWidget(self.overview_page)
+        self.content_stack.addWidget(self.detail_page)
+        layout.addWidget(self.content_stack, stretch=1)
 
         self.object_tree.itemSelectionChanged.connect(self._handle_tree_selection_changed)
         self.review_tree.itemSelectionChanged.connect(self._handle_tree_selection_changed)
         self.review_tree.itemDoubleClicked.connect(self._handle_review_item_double_clicked)
+        self._show_overview()
 
     def load_document(self, document: ProjectDocument | None) -> None:
         self._syncing = True
@@ -95,32 +190,42 @@ class SemanticObjectsPanel(QFrame):
         self.review_tree.clear()
 
         if document is None or document.semantic_result is None:
-            self.tabs.setEnabled(False)
             self.object_badge.setText("0 found")
             self.review_badge.setText("0 review")
             self.summary.setText("Import a DXF to inspect recognized objects.")
-            self.tabs.setTabText(0, "Objects")
-            self.tabs.setTabText(1, "Confirm")
+            self.overview_hint.setText("Recognized objects and review items will appear here after import.")
+            self.review_callout.hide()
+            self._update_mode_buttons(entity_count=0, review_count=0)
+            self.open_objects_button.hide()
+            self.open_review_button.hide()
+            self._show_overview()
             self._syncing = False
             return
 
         result = document.semantic_result
-        self.tabs.setEnabled(True)
         self.object_badge.setText(f"{len(result.entities)} found")
         self.review_badge.setText(f"{len(result.review)} review")
         if result.review:
             self.summary.setText(
                 f"{len(result.entities)} objects recognized. {len(result.review)} items need review. "
-                "Double-click a Confirm item to classify it."
+                "Double-click a Review item to classify it."
             )
         elif result.entities:
             self.summary.setText(
                 f"{len(result.entities)} objects recognized. Select one to highlight it in the 2D preview."
             )
+            self.overview_hint.setText(
+                "Recognition results are available. Open the object list when you want to inspect or cross-check a match."
+            )
         else:
             self.summary.setText("Recognized objects will appear here after import.")
-        self.tabs.setTabText(0, f"Objects ({len(result.entities)})")
-        self.tabs.setTabText(1, f"Confirm ({len(result.review)})")
+            self.overview_hint.setText("No recognized objects are available for this import yet.")
+        self._update_review_callout(result.review)
+        self._update_mode_buttons(entity_count=len(result.entities), review_count=len(result.review))
+        self.open_objects_button.setVisible(bool(result.entities))
+        self.open_review_button.setVisible(bool(result.review))
+        self.open_objects_button.setText(f"Browse Objects ({len(result.entities)})")
+        self.open_review_button.setText(f"Open Review ({len(result.review)})")
 
         selected_object_item = self._populate_tree(
             self.object_tree,
@@ -136,17 +241,48 @@ class SemanticObjectsPanel(QFrame):
         )
 
         if selected_review_item is not None:
-            self.tabs.setCurrentWidget(self.review_tree)
             self.review_tree.setCurrentItem(selected_review_item)
+            self._open_detail_view("review")
         elif selected_object_item is not None:
-            self.tabs.setCurrentWidget(self.object_tree)
             self.object_tree.setCurrentItem(selected_object_item)
-        elif result.entities:
-            self.tabs.setCurrentWidget(self.object_tree)
+            self._open_detail_view("objects")
         else:
-            self.tabs.setCurrentWidget(self.review_tree)
+            self._show_overview()
 
         self._syncing = False
+
+    def _build_mode_button(self, parent: QWidget | None = None) -> QToolButton:
+        button = QToolButton(parent or self)
+        button.setCheckable(True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setObjectName("SemanticModeButton")
+        button.setStyleSheet(
+            """
+            QToolButton#SemanticModeButton {
+                background: #202020;
+                color: #BEBEBE;
+                border: 1px solid #303030;
+                border-radius: 999px;
+                padding: 6px 12px;
+                font-weight: 600;
+            }
+            QToolButton#SemanticModeButton:hover {
+                background: #272727;
+                color: #F0F0F0;
+            }
+            QToolButton#SemanticModeButton:checked {
+                background: #2F2F2F;
+                color: #FFFFFF;
+                border-color: #494949;
+            }
+            QToolButton#SemanticModeButton:disabled {
+                background: #1D1D1D;
+                color: #757575;
+                border-color: #272727;
+            }
+            """
+        )
+        return button
 
     def _build_tree(self) -> QTreeWidget:
         tree = QTreeWidget(self)
@@ -231,6 +367,59 @@ class SemanticObjectsPanel(QFrame):
         semantic_item = item.data(0, ITEM_OBJECT_ROLE)
         if isinstance(key, str) and semantic_item is not None:
             self.review_override_requested.emit({"key": key, "item": semantic_item})
+
+    def _update_review_callout(self, items: list[SemanticCandidate]) -> None:
+        if not items:
+            self.review_callout.hide()
+            return
+
+        next_item = min(items, key=lambda item: (item.layer_name, -item.confidence, item.id))
+        next_label = self._display_name(next_item)
+        if len(items) == 1:
+            text = (
+                f"1 item is waiting for confirmation. Start with {next_label} on {next_item.layer_name}. "
+                "Double-click it in Review to classify it."
+            )
+        else:
+            text = (
+                f"{len(items)} items are waiting for confirmation. Start with {next_label} on {next_item.layer_name}. "
+                "Double-click a Review row to classify it."
+            )
+        self.review_hint_label.setText(text)
+        self.review_callout.show()
+
+    def _update_mode_buttons(self, *, entity_count: int, review_count: int) -> None:
+        self.object_mode_button.setText(f"Objects {entity_count}")
+        self.object_mode_button.setToolTip(f"{entity_count} recognized objects")
+        self.object_mode_button.setEnabled(entity_count > 0)
+
+        self.review_mode_button.setText(f"Review {review_count}")
+        self.review_mode_button.setToolTip(f"{review_count} items need confirmation")
+        self.review_mode_button.setEnabled(review_count > 0)
+
+    def _show_overview(self) -> None:
+        self.content_stack.setCurrentWidget(self.overview_page)
+
+    def _open_detail_view(self, mode: str) -> None:
+        self.content_stack.setCurrentWidget(self.detail_page)
+        self._set_active_view(mode)
+
+    def _set_active_view(self, mode: str) -> None:
+        show_review = mode == "review"
+        if show_review and not self.review_mode_button.isEnabled():
+            show_review = False
+        if not show_review and not self.object_mode_button.isEnabled() and self.review_mode_button.isEnabled():
+            show_review = True
+
+        self.object_mode_button.setChecked(not show_review)
+        self.review_mode_button.setChecked(show_review)
+        self.mode_stack.setCurrentWidget(self.review_tree if show_review else self.object_tree)
+        if show_review:
+            self.detail_title.setText("Review queue")
+            self.detail_hint.setText("Double-click a review row to classify it and confirm the recognition.")
+        else:
+            self.detail_title.setText("Recognized objects")
+            self.detail_hint.setText("Select one item to inspect it in the 2D preview.")
 
     def _display_kind(self, kind: str) -> str:
         return kind.removesuffix("_candidate").replace("_", " ").title()

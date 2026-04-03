@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -53,6 +54,7 @@ class LayerConfigDialog(QDialog):
         }
         self._layer_mapping_overrides = dict(layer_mapping_overrides or {})
         self._rows: list[tuple[str, int, QCheckBox, QComboBox]] = []
+        self._detected_roles: dict[str, str] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -79,6 +81,21 @@ class LayerConfigDialog(QDialog):
         status_row.addStretch(1)
         layout.addLayout(status_row)
 
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(0, 0, 0, 0)
+        filter_row.setSpacing(8)
+
+        self.filter_input = QLineEdit(self)
+        self.filter_input.setPlaceholderText("Filter layers or roles")
+        self.filter_input.setClearButtonEnabled(True)
+        self.filter_input.textChanged.connect(self._update_row_visibility)
+        filter_row.addWidget(self.filter_input, stretch=1)
+
+        self.hide_empty_checkbox = QCheckBox("Hide empty layers", self)
+        self.hide_empty_checkbox.toggled.connect(self._update_row_visibility)
+        filter_row.addWidget(self.hide_empty_checkbox)
+        layout.addLayout(filter_row)
+
         actions_row = QHBoxLayout()
         actions_row.setContentsMargins(0, 0, 0, 0)
         actions_row.setSpacing(8)
@@ -87,6 +104,11 @@ class LayerConfigDialog(QDialog):
         enable_all_button.setObjectName("SecondaryButton")
         enable_all_button.clicked.connect(lambda: self._set_all_layers_enabled(True))
         actions_row.addWidget(enable_all_button)
+
+        disable_all_button = QPushButton("Disable All", self)
+        disable_all_button.setObjectName("SecondaryButton")
+        disable_all_button.clicked.connect(lambda: self._set_all_layers_enabled(False))
+        actions_row.addWidget(disable_all_button)
 
         populated_button = QPushButton("Only Populated", self)
         populated_button.setObjectName("SecondaryButton")
@@ -130,14 +152,13 @@ class LayerConfigDialog(QDialog):
 
             layer_item = QTableWidgetItem(layer_name)
             count_item = QTableWidgetItem(str(entity_count))
-            detected_item = QTableWidgetItem(
-                format_layer_role(layer.get("suggested_role") or layer.get("mapped_type"))
-            )
+            detected_text = format_layer_role(layer.get("suggested_role") or layer.get("mapped_type"))
+            detected_item = QTableWidgetItem(detected_text)
 
             mapping_combo = QComboBox()
             for label, value in LAYER_MAPPING_CHOICES:
                 mapping_combo.addItem(label, userData=value)
-            mapping_combo.currentIndexChanged.connect(self._update_summary)
+            mapping_combo.currentIndexChanged.connect(self._handle_mapping_changed)
 
             override_value = self._layer_mapping_overrides.get(layer_name)
             mapping_index = 0
@@ -152,11 +173,13 @@ class LayerConfigDialog(QDialog):
             self.table.setItem(row_index, 3, detected_item)
             self.table.setCellWidget(row_index, 4, mapping_combo)
             self._rows.append((layer_name, entity_count, checkbox, mapping_combo))
+            self._detected_roles[layer_name] = detected_text
 
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
+        self._update_row_visibility()
         self._update_summary()
 
     def result_payload(self) -> dict[str, Any]:
@@ -201,6 +224,25 @@ class LayerConfigDialog(QDialog):
             blockers.append(QSignalBlocker(checkbox))
             blockers.append(QSignalBlocker(mapping_combo))
             updater(layer_name, entity_count, checkbox, mapping_combo)
+        self._update_row_visibility()
+        self._update_summary()
+
+    def _handle_mapping_changed(self, *_args: object) -> None:
+        self._update_row_visibility()
+
+    def _update_row_visibility(self, *_args: object) -> None:
+        filter_text = self.filter_input.text().strip().lower()
+        hide_empty = self.hide_empty_checkbox.isChecked()
+
+        for row_index, (layer_name, entity_count, _checkbox, mapping_combo) in enumerate(self._rows):
+            detected_text = self._detected_roles.get(layer_name, "").lower()
+            mapping_text = mapping_combo.currentText().strip().lower()
+            matches_filter = not filter_text or any(
+                filter_text in candidate
+                for candidate in (layer_name.lower(), detected_text, mapping_text)
+            )
+            keep_visible = matches_filter and (not hide_empty or entity_count > 0)
+            self.table.setRowHidden(row_index, not keep_visible)
         self._update_summary()
 
     def _update_summary(self, *_args: object) -> None:
@@ -210,8 +252,9 @@ class LayerConfigDialog(QDialog):
         remapped_layers = 0
         populated_layers = 0
         enabled_populated_layers = 0
+        visible_rows = 0
 
-        for _layer_name, entity_count, checkbox, mapping_combo in self._rows:
+        for row_index, (_layer_name, entity_count, checkbox, mapping_combo) in enumerate(self._rows):
             is_enabled = checkbox.isChecked()
             if is_enabled:
                 enabled_layers += 1
@@ -226,6 +269,9 @@ class LayerConfigDialog(QDialog):
             if mapping_combo.currentData() is not None:
                 remapped_layers += 1
 
+            if not self.table.isRowHidden(row_index):
+                visible_rows += 1
+
         self.scope_badge.setText(f"{enabled_layers} enabled")
         self.mapping_badge.setText(f"{remapped_layers} remapped")
 
@@ -237,9 +283,13 @@ class LayerConfigDialog(QDialog):
             detail_parts.append(f"{enabled_populated_layers}/{populated_layers} populated")
         if remapped_layers:
             detail_parts.append(f"{remapped_layers} explicit role overrides")
+        if visible_rows != total_layers:
+            detail_parts.append(f"showing {visible_rows}/{total_layers}")
 
         detail = ", ".join(detail_parts) + ". "
-        if enabled_layers:
+        if visible_rows == 0:
+            detail += "No layers match the current filter."
+        elif enabled_layers:
             detail += "Apply refreshes the 2D import preview before thickness and 3D build."
         else:
             detail += "Enable at least one layer to continue."

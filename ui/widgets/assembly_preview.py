@@ -194,8 +194,8 @@ class AssemblyPreviewWidget(QWidget):
         self._configure_camera(diagonal)
         controller = Qt3DExtras.QOrbitCameraController(root)
         controller.setCamera(self._window.camera())
-        controller.setLinearSpeed(max(diagonal * 0.35, 2.0))
-        controller.setLookSpeed(180.0)
+        controller.setLinearSpeed(max(diagonal * 0.9, 6.0))
+        controller.setLookSpeed(320.0)
 
         light_entity = Qt3DCore.QEntity(root)
         light = Qt3DRender.QDirectionalLight(light_entity)
@@ -346,14 +346,15 @@ class ModelPreviewPanel(QFrame):
     def load_document(self, document: ProjectDocument | None, *, progressive: bool = False) -> None:
         if document is None:
             self._set_status("Idle")
-            self.summary.setText("Import a DXF to start the stacked preview.")
+            self.summary.setText("Import a DXF to start the stacked preview. Drag to orbit and use the wheel to zoom.")
             self.hide_build_progress()
             self.surface.show_placeholder("Import a DXF to generate the stacked model.", action_text="Import DXF")
             return
 
         if document.stack_preview_assembly is not None:
             self._set_status("Ready", tone="good")
-            self.summary.setText(document.note or "Stacked preview ready.")
+            ready_summary = document.note or "Stacked preview ready."
+            self.summary.setText(f"{ready_summary} Drag to orbit and use the wheel to zoom.")
             self.hide_build_progress()
             layer_meshes = document.stack_preview_layer_meshes or build_layer_mesh_payloads(
                 document.stack_preview_assembly,
@@ -367,14 +368,16 @@ class ModelPreviewPanel(QFrame):
 
         if document.layer_meshes:
             self._set_status("Ready", tone="good")
-            self.summary.setText(document.note or "Stacked preview ready.")
+            ready_summary = document.note or "Stacked preview ready."
+            self.summary.setText(f"{ready_summary} Drag to orbit and use the wheel to zoom.")
             self.hide_build_progress()
             self.surface.load_layer_meshes(document.layer_meshes)
             return
 
         if document.mesh_bytes is not None and document.mesh_vertex_count > 0:
             self._set_status("Ready", tone="good")
-            self.summary.setText(document.note or "Stacked preview ready.")
+            ready_summary = document.note or "Stacked preview ready."
+            self.summary.setText(f"{ready_summary} Drag to orbit and use the wheel to zoom.")
             self.hide_build_progress()
             self.surface.load_mesh_payload(
                 document.mesh_bytes,
@@ -383,7 +386,8 @@ class ModelPreviewPanel(QFrame):
             )
         elif document.assembly is not None:
             self._set_status("Ready", tone="good")
-            self.summary.setText(document.note or "Stacked preview ready.")
+            ready_summary = document.note or "Stacked preview ready."
+            self.summary.setText(f"{ready_summary} Drag to orbit and use the wheel to zoom.")
             self.hide_build_progress()
             self.surface.load_assembly(document.assembly, progressive=progressive)
         elif document.status == "building-3d":

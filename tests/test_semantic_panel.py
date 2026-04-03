@@ -66,10 +66,11 @@ def test_semantic_panel_groups_objects_and_review_items():
 
     panel.load_document(document)
 
-    assert panel.tabs.tabText(0) == "Objects (2)"
-    assert panel.tabs.tabText(1) == "Confirm (1)"
+    assert panel.object_mode_button.text() == "Objects 2"
+    assert panel.review_mode_button.text() == "Review 1"
     assert panel.object_tree.topLevelItemCount() == 2
     assert panel.review_tree.topLevelItemCount() == 1
+    assert panel.content_stack.currentWidget() is panel.detail_page
     assert panel.object_tree.currentItem().text(0).startswith("Pad")
     assert "2 objects recognized" in panel.summary.text()
     assert panel.object_tree.columnCount() == 2
@@ -159,5 +160,57 @@ def test_semantic_panel_emits_manage_presets_request():
     panel.manage_presets_button.click()
 
     assert triggered == [True]
+
+    panel.deleteLater()
+
+
+def test_semantic_panel_prioritizes_review_queue_when_items_need_confirmation():
+    _app()
+    panel = SemanticObjectsPanel()
+    document = ProjectDocument(
+        path=Path("semantic_review_queue.dxf"),
+        size_bytes=0,
+        raw_entities=[],
+        scene_rect=(0.0, 0.0, 10.0, 10.0),
+        raw_counts=Counter(),
+        semantic_result=SemanticClassificationResult(
+            candidates=[],
+            entities=[
+                SemanticEntity(
+                    id="pad_1",
+                    kind="pad",
+                    layer_name="04_pad",
+                    confidence=0.91,
+                    source_indices=(3,),
+                )
+            ],
+            review=[
+                SemanticCandidate(
+                    id="wire_candidate_1",
+                    kind="wire_candidate",
+                    layer_name="06_wire",
+                    confidence=0.72,
+                    source_indices=(4,),
+                )
+            ],
+            relation_notes=[],
+        ),
+    )
+
+    panel.load_document(document)
+
+    assert panel.content_stack.currentWidget() is panel.overview_page
+    assert not panel.review_callout.isHidden()
+    assert "Start with Wire on 06_wire" in panel.review_hint_label.text()
+    assert not panel.open_review_button.isHidden()
+    assert panel.open_review_button.text() == "Open Review (1)"
+    assert panel.review_mode_button.toolTip() == "1 items need confirmation"
+
+    panel.open_review_button.click()
+
+    assert panel.content_stack.currentWidget() is panel.detail_page
+    assert panel.mode_stack.currentWidget() is panel.review_tree
+    assert not panel.object_mode_button.isChecked()
+    assert panel.review_mode_button.isChecked()
 
     panel.deleteLater()
