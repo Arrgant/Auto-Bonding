@@ -255,6 +255,58 @@ def _find_merge_candidates(
     return tuple(candidates)
 
 
+def format_wire_extraction_audit_report(audit: WireExtractionAudit) -> str:
+    """Render a deterministic text report for reviewing wire extraction quality."""
+
+    lines = [
+        "Wire Extraction Audit",
+        f"Wire layers: {', '.join(audit.wire_layers) if audit.wire_layers else '(none)'}",
+        f"Converted entities: {audit.extracted_wire_count}/{audit.candidate_entity_count}",
+        "",
+        "Extracted entity types:",
+    ]
+    if audit.extracted_counts_by_type:
+        for entity_type, count in sorted(audit.extracted_counts_by_type.items()):
+            lines.append(f"- {entity_type}: {count}")
+    else:
+        lines.append("- none")
+
+    lines.extend(["", "Skipped entities:"])
+    if audit.skipped_entities:
+        for reason, count in sorted(audit.skipped_counts_by_reason.items()):
+            lines.append(f"- {reason}: {count}")
+        for item in audit.skipped_entities:
+            lines.append(
+                f"  - #{item.entity_index} layer={item.layer_name} "
+                f"type={item.entity_type} reason={item.reason}"
+            )
+    else:
+        lines.append("- none")
+
+    lines.extend(["", "Potential split-wire joins:"])
+    if audit.merge_candidates:
+        for item in sorted(
+            audit.merge_candidates,
+            key=lambda candidate: (
+                candidate.endpoint_alignment != "same_role_conflict",
+                candidate.first_wire_id,
+                candidate.second_wire_id,
+                candidate.shared_x,
+                candidate.shared_y,
+            ),
+        ):
+            lines.append(
+                f"- {item.first_wire_id}({item.first_endpoint_role}) <-> "
+                f"{item.second_wire_id}({item.second_endpoint_role}) "
+                f"@ ({item.shared_x:.6f}, {item.shared_y:.6f}) "
+                f"[{item.endpoint_alignment}]"
+            )
+    else:
+        lines.append("- none")
+
+    return "\n".join(lines) + "\n"
+
+
 def _merge_endpoint_alignment(
     first_role: str,
     second_role: str,
@@ -271,4 +323,5 @@ __all__ = [
     "WireMergeEndpointAlignment",
     "extract_wire_geometries",
     "extract_wire_geometries_with_audit",
+    "format_wire_extraction_audit_report",
 ]

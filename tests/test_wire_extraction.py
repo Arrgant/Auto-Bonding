@@ -6,6 +6,7 @@ from core.export import (
     WireOrderingConfig,
     extract_wire_geometries,
     extract_wire_geometries_with_audit,
+    format_wire_extraction_audit_report,
     order_wire_geometries,
 )
 
@@ -204,3 +205,33 @@ def test_extract_wire_geometries_with_audit_flags_same_role_merge_direction_conf
     ] == [
         ("W0001", "W0002", "second", "second", "same_role_conflict"),
     ]
+
+
+def test_format_wire_extraction_audit_report_lists_skips_and_conflicts_first():
+    raw_entities = [
+        {"type": "LINE", "start": (0.0, 0.0), "end": (10.0, 0.0), "layer": "06_wire"},
+        {"type": "POINT", "location": (5.0, 5.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (20.0, 0.0), "end": (10.0, 0.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (100.0, 0.0), "end": (110.0, 0.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (110.0, 0.0), "end": (120.0, 0.0), "layer": "06_wire"},
+    ]
+    layer_info = [{"name": "06_wire", "mapped_type": "wire", "suggested_role": "wire"}]
+
+    _wires, audit = extract_wire_geometries_with_audit(raw_entities, layer_info)
+
+    assert format_wire_extraction_audit_report(audit) == (
+        "Wire Extraction Audit\n"
+        "Wire layers: 06_wire\n"
+        "Converted entities: 4/5\n"
+        "\n"
+        "Extracted entity types:\n"
+        "- LINE: 4\n"
+        "\n"
+        "Skipped entities:\n"
+        "- unsupported_entity_type: 1\n"
+        "  - #1 layer=06_wire type=POINT reason=unsupported_entity_type\n"
+        "\n"
+        "Potential split-wire joins:\n"
+        "- W0001(second) <-> W0003(second) @ (10.000000, 0.000000) [same_role_conflict]\n"
+        "- W0004(second) <-> W0005(first) @ (110.000000, 0.000000) [continuous]\n"
+    )
