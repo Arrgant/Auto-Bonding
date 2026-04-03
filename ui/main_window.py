@@ -50,7 +50,9 @@ from .layer_thickness_dialog import LayerThicknessDialog
 from .layer_semantic_preset_dialog import LayerSemanticPresetDialog
 from .stack_preview_worker import StackPreviewWorker
 from .wire_export_dialog import WireExportDialog
-from .widgets import DXFPreviewView, LayerManagerPanel, ModelPreviewPanel, SemanticObjectsPanel
+from .widgets import DXFPreviewView, LayerManagerPanel, ModelPreviewPanel
+
+TOPBAR_BUTTON_WIDTH = 168
 
 
 class MainWindow(QMainWindow):
@@ -71,6 +73,7 @@ class MainWindow(QMainWindow):
         self._stack_preview_worker: StackPreviewWorker | None = None
         self._pending_import_config: dict[str, Any] | None = None
         self._pending_layer_setup_message: str | None = None
+        self._auto_build_after_preview = False
         self._skip_next_walkthrough = False
         self._layer_walkthrough_queue: list[str] = []
         self._layer_walkthrough_index = -1
@@ -108,20 +111,10 @@ class MainWindow(QMainWindow):
         left_body = QWidget()
         left_body_layout = QHBoxLayout(left_body)
         left_body_layout.setContentsMargins(0, 0, 0, 0)
-        left_body_layout.setSpacing(12)
-
-        sidebar = QWidget()
-        sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(0, 0, 0, 0)
-        sidebar_layout.setSpacing(12)
+        left_body_layout.setSpacing(0)
 
         self.layer_panel = LayerManagerPanel()
-        sidebar_layout.addWidget(self.layer_panel, stretch=1)
-
-        self.semantic_panel = SemanticObjectsPanel()
-        sidebar_layout.addWidget(self.semantic_panel, stretch=1)
-
-        left_body_layout.addWidget(sidebar)
+        left_body_layout.addWidget(self.layer_panel)
 
         self.preview = DXFPreviewView()
         left_body_layout.addWidget(self.preview, stretch=1)
@@ -132,7 +125,7 @@ class MainWindow(QMainWindow):
         split.addWidget(self.model_preview)
         split.setSizes([820, 620])
 
-        self.preview.file_drop_handler = self._load_document
+        self.preview.file_drop_handler = lambda path: self._load_document(path, preview_only=True, auto_continue=True)
         self.preview.import_requested_handler = self._import_file
         self.preview.selection_changed_handler = self._handle_preview_selection
         self.preview.closed_shape_click_handler = self._configure_shape_thickness
@@ -140,10 +133,6 @@ class MainWindow(QMainWindow):
         self.layer_panel.layer_visibility_changed.connect(self._handle_layer_visibility_changed)
         self.layer_panel.layer_selected.connect(self._handle_layer_selected)
         self.layer_panel.layer_thickness_requested.connect(self._edit_layer_thickness)
-        self.semantic_panel.semantic_item_selected.connect(self._handle_semantic_item_selected)
-        self.semantic_panel.review_override_requested.connect(self._handle_review_override_requested)
-        self.semantic_panel.preset_manage_requested.connect(self._open_semantic_preset_manager)
-
         self.status_stage = QLabel("Idle")
         self.status_stage.setObjectName("StatusBadge")
         self.status_file_label = QLabel("No file")
@@ -194,25 +183,19 @@ class MainWindow(QMainWindow):
             "Import DXF",
             self._import_file,
         )
-        self.layers_button = self._build_icon_button(
-            self._make_toolbar_icon("layers"),
-            "Import Layers",
-            self._open_layer_setup,
-        )
         self.export_button = self._build_menu_button(
             self._make_toolbar_icon("export"),
             "Export",
         )
 
         layout.addWidget(self.import_button)
-        layout.addWidget(self.layers_button)
         layout.addWidget(self.export_button)
-        self._refresh_layer_setup_button()
         return top
 
     def _build_icon_button(self, icon: QIcon, label: str, handler) -> QToolButton:
         button = QToolButton()
         button.setObjectName("TopBarButton")
+        button.setFixedWidth(TOPBAR_BUTTON_WIDTH)
         button.setIcon(icon)
         button.setText(label)
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -226,6 +209,7 @@ class MainWindow(QMainWindow):
     def _build_menu_button(self, icon: QIcon, label: str) -> QToolButton:
         button = QToolButton()
         button.setObjectName("TopBarButton")
+        button.setFixedWidth(TOPBAR_BUTTON_WIDTH)
         button.setIcon(icon)
         button.setText(label)
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -314,6 +298,10 @@ class MainWindow(QMainWindow):
             #TopBarButton:disabled {
                 background: #1F1F1F;
                 border-color: #2B2B2B;
+            }
+            QToolButton#TopBarButton::menu-indicator {
+                image: none;
+                width: 0px;
             }
             #SecondaryButton {
                 background: #202020;
@@ -493,7 +481,7 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        self._load_document(Path(file_path), preview_only=True)
+        self._load_document(Path(file_path), preview_only=True, auto_continue=True)
 
     def _load_document(
         self,
@@ -501,11 +489,13 @@ class MainWindow(QMainWindow):
         *,
         layer_settings: dict[str, Any] | None = None,
         preview_only: bool = False,
+        auto_continue: bool = False,
     ) -> None:
         if self._import_thread is not None:
             QMessageBox.information(self, "Import in progress", "Please wait for the current DXF import to finish.")
             return
 
+        self._auto_build_after_preview = bool(preview_only and auto_continue)
         self._pending_import_config = self._config(layer_settings=layer_settings, preview_only=preview_only)
         self._set_status_message(
             "Reading DXF and extracting layers.",
@@ -515,7 +505,6 @@ class MainWindow(QMainWindow):
         )
         self.progress.setRange(0, 0)
         self.import_button.setEnabled(False)
-        self.layers_button.setEnabled(False)
         self.export_button.setEnabled(False)
         self._set_import_actions_enabled(False)
 
@@ -815,7 +804,6 @@ class MainWindow(QMainWindow):
         self._layer_walkthrough_queue = ordered_layers
         self._layer_walkthrough_index = -1
         self._layer_walkthrough_active = True
-        self.layers_button.setEnabled(False)
         QTimer.singleShot(0, self._advance_layer_walkthrough)
 
     def _finish_layer_walkthrough(self) -> None:
@@ -847,7 +835,6 @@ class MainWindow(QMainWindow):
         self.layer_panel.load_document(self.document)
         if self.document.stack_preview_assembly is not None:
             self.model_preview.load_document(self.document)
-        self.layers_button.setEnabled(self._import_thread is None)
 
         if should_start_final_build and next_path is not None and next_layer_settings is not None:
             self._skip_next_walkthrough = True
@@ -1053,11 +1040,16 @@ class MainWindow(QMainWindow):
         self.progress.setValue(35)
         self.preview.load_document(self.document)
         self.layer_panel.load_document(self.document)
-        self.semantic_panel.load_document(self.document)
         self.model_preview.load_document(self.document)
-        self._refresh_layer_setup_button()
         if self._skip_next_walkthrough:
             self._skip_next_walkthrough = False
+        elif self._auto_build_after_preview:
+            self._set_status_message(
+                "2D preview is ready. Building 3D automatically. Adjust layer thickness later from the Layers panel if needed.",
+                stage="Building",
+                tone="busy",
+                file_name=file_path.name,
+            )
         else:
             self._start_layer_walkthrough()
 
@@ -1195,7 +1187,6 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self.import_button.setEnabled(True)
-        self.layers_button.setEnabled(not self._layer_walkthrough_active)
         self.model_preview.hide_build_progress()
         self._update_ui()
 
@@ -1221,11 +1212,15 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.import_button.setEnabled(True)
-        self.layers_button.setEnabled(bool(self.document))
         self.export_button.setEnabled(self._has_exportable_outputs())
         self.model_preview.hide_build_progress()
 
     def _finish_import_thread(self, *_args: object) -> None:
+        pending_config = dict(self._pending_import_config or {})
+        auto_build_after_preview = bool(self._auto_build_after_preview)
+        next_path = self.document.path if self.document is not None else None
+        next_layer_settings = self._current_layer_settings() if self.document is not None else None
+
         if self._import_thread is not None:
             self._import_thread.quit()
             self._import_thread.wait()
@@ -1236,9 +1231,26 @@ class MainWindow(QMainWindow):
             self._import_worker.deleteLater()
             self._import_worker = None
         self._pending_import_config = None
+        self._auto_build_after_preview = False
         self._set_import_actions_enabled(True)
-        if not self._layer_walkthrough_active:
-            self.layers_button.setEnabled(self.document is not None)
+
+        if (
+            auto_build_after_preview
+            and pending_config.get("preview_only")
+            and next_path is not None
+            and next_layer_settings is not None
+            and self.document is not None
+            and self.document.assembly is None
+        ):
+            self._skip_next_walkthrough = True
+            QTimer.singleShot(
+                0,
+                lambda path=next_path, settings=next_layer_settings: self._load_document(
+                    path,
+                    layer_settings=settings,
+                    preview_only=False,
+                ),
+            )
 
     def closeEvent(self, event) -> None:  # pragma: no cover - GUI teardown path
         if self._import_worker is not None:
@@ -1255,13 +1267,8 @@ class MainWindow(QMainWindow):
     def _update_ui(self) -> None:
         self.preview.load_document(self.document)
         self.layer_panel.load_document(self.document)
-        self.semantic_panel.load_document(self.document)
         self.model_preview.load_document(self.document)
-        self._refresh_layer_setup_button()
         self._set_import_actions_enabled(self._import_thread is None)
-        self.layers_button.setEnabled(
-            self.document is not None and self._import_thread is None and not self._layer_walkthrough_active
-        )
         self.export_button.setEnabled(self._has_exportable_outputs())
 
     def _has_exportable_outputs(self) -> bool:
@@ -1410,7 +1417,6 @@ class MainWindow(QMainWindow):
         self.preview.load_document(self.document)
         self.preview.focus_entity(selected_index)
         self.layer_panel.load_document(self.document)
-        self.semantic_panel.load_document(self.document)
 
         kind_label = getattr(semantic_item, "kind", "object")
         kind_label = str(kind_label).removesuffix("_candidate").replace("_", " ")
@@ -1501,7 +1507,6 @@ class MainWindow(QMainWindow):
 
         self.document.selected_semantic_key = selected_key
         self.layer_panel.load_document(self.document)
-        self.semantic_panel.load_document(self.document)
         if selected_key and selected_item is not None:
             self._handle_semantic_item_selected({"key": selected_key, "item": selected_item})
         self._set_status_message(
