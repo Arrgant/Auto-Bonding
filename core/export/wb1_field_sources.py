@@ -6,8 +6,20 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .wire_recipe_defaults import RX2000_STARTER_WB1_FIELD_MAP
+from .wire_recipe_models import WireRecipeTemplate
 
 DxfAvailability = Literal["direct", "derived", "3d_only", "no"]
+WB1WriteCategory = Literal[
+    "output_name",
+    "template_header",
+    "template_raw_index",
+    "template_shared",
+    "template_role",
+    "dynamic_geometry",
+    "dynamic_ordering",
+    "hardcoded_zero",
+    "prototype_copy",
+]
 
 
 @dataclass(frozen=True)
@@ -19,6 +31,19 @@ class WB1FieldSourceInfo:
     current_source: str
     current_from_dxf: bool
     note: str
+
+
+@dataclass(frozen=True)
+class WB1WritePlanItem:
+    """Describe one WB1 location that the current exporter may modify."""
+
+    segment: str
+    location: str
+    field_name: str
+    index: int | None
+    categories: tuple[WB1WriteCategory, ...]
+    writes_from_dxf: bool
+    detail: str
 
 
 RX2000_WB1_FIELD_SOURCES: dict[str, WB1FieldSourceInfo] = {
@@ -432,10 +457,187 @@ def rx2000_fields_currently_written_from_dxf() -> tuple[str, ...]:
     )
 
 
+def build_wb1_write_plan(template: WireRecipeTemplate) -> tuple[WB1WritePlanItem, ...]:
+    """Return a structured list of WB1 locations the exporter currently touches."""
+
+    plan: list[WB1WritePlanItem] = [
+        WB1WritePlanItem(
+            segment="PRE",
+            location="line0:filename",
+            field_name="file_name_header",
+            index=None,
+            categories=("output_name",),
+            writes_from_dxf=False,
+            detail="Rewrites the machine header filename token from the chosen export file name.",
+        )
+    ]
+
+    for key in sorted(template.header_defaults):
+        plan.append(
+            WB1WritePlanItem(
+                segment=key.split(":", 1)[0].upper(),
+                location=key,
+                field_name="header_word",
+                index=None,
+                categories=("template_header",),
+                writes_from_dxf=False,
+                detail="Template-driven header word override.",
+            )
+        )
+
+    role_fields: set[str] = set()
+    for values in template.role_record_defaults.values():
+        role_fields.update(values)
+
+    reverse_field_map = {index: field_name for field_name, index in template.wb1_field_map.items()}
+    for index in sorted(reverse_field_map):
+        field_name = reverse_field_map[index]
+        categories = _j_field_write_categories(template, field_name, index, role_fields)
+        source_info = RX2000_WB1_FIELD_SOURCES.get(field_name)
+        writes_from_dxf = any(
+            category in {"dynamic_geometry", "dynamic_ordering"} for category in categories
+        )
+        if source_info is not None:
+            detail = source_info.note
+        elif "prototype_copy" in categories:
+            detail = "Falls back to the prototype J row copied from the WB1 template."
+        else:
+            detail = "Current source depends on the template configuration for this field."
+        plan.append(
+            WB1WritePlanItem(
+                segment="J",
+                location=f"J:{index}",
+                field_name=field_name,
+                index=index,
+                categories=categories,
+                writes_from_dxf=writes_from_dxf,
+                detail=detail,
+            )
+        )
+
+    for index in sorted(template.wb1_record_defaults):
+        if index in reverse_field_map:
+            continue
+        plan.append(
+            WB1WritePlanItem(
+                segment="J",
+                location=f"J:{index}",
+                field_name=f"word_{index}",
+                index=index,
+                categories=("template_raw_index",),
+                writes_from_dxf=False,
+                detail="Raw WB1 word override by index.",
+            )
+        )
+
+    return tuple(plan)
+
+
+def current_j_segment_write_plan(template: WireRecipeTemplate) -> tuple[WB1WritePlanItem, ...]:
+    """Return only the J-segment part of the current write plan."""
+
+    return tuple(item for item in build_wb1_write_plan(template) if item.segment == "J")
+
+
+def current_j_segment_dxf_fields(template: WireRecipeTemplate) -> tuple[WB1WritePlanItem, ...]:
+    """Return only J-segment fields currently derived from geometry or ordering."""
+
+    return tuple(item for item in current_j_segment_write_plan(template) if item.writes_from_dxf)
+
+
+def required_wb1_j_fields(template: WireRecipeTemplate) -> tuple[str, ...]:
+    """Return the J-segment field names the current export mode cannot safely omit."""
+
+    required: list[str] = ["role_code", "bond_x", "bond_y"]
+    if template.ordering.group_mode == "clustered":
+        required.append("group_no")
+    if template.bond_angle_mode == "wire_vector":
+        required.append("bond_angle")
+    return tuple(required)
+
+
+def missing_required_wb1_j_fields(template: WireRecipeTemplate) -> tuple[str, ...]:
+    """Return required J fields missing from the current template field map."""
+
+    return tuple(
+        field_name
+        for field_name in required_wb1_j_fields(template)
+        if field_name not in template.wb1_field_map
+    )
+
+
+def summarize_wb1_template_health(template: WireRecipeTemplate) -> tuple[str, ...]:
+    """Return short user-facing notes about the current WB1 export readiness."""
+
+    messages: list[str] = []
+    required_fields = required_wb1_j_fields(template)
+    missing_fields = missing_required_wb1_j_fields(template)
+    if missing_fields:
+        messages.append("Missing required WB1 J fields: " + ", ".join(missing_fields) + ".")
+    else:
+        messages.append("Required WB1 J fields mapped: " + ", ".join(required_fields) + ".")
+
+    dxf_fields: list[str] = []
+    for field_name in ("role_code", "bond_x", "bond_y"):
+        if field_name in template.wb1_field_map:
+            dxf_fields.append(field_name)
+    if template.ordering.group_mode == "clustered" and "group_no" in template.wb1_field_map:
+        dxf_fields.append("group_no")
+    if template.bond_angle_mode == "wire_vector" and "bond_angle" in template.wb1_field_map:
+        dxf_fields.append("bond_angle")
+    if dxf_fields:
+        messages.append("Current DXF-driven J fields: " + ", ".join(dxf_fields) + ".")
+
+    if "bond_z" in template.wb1_field_map:
+        messages.append("bond_z uses explicit point Z when available, otherwise template default_z.")
+
+    camera_fields = {"camera_x", "camera_y", "camera_z"}
+    if camera_fields.issubset(template.wb1_field_map):
+        messages.append("camera_x/y/z currently export as 0 until camera calibration is modeled.")
+
+    return tuple(messages)
+
+
+def _j_field_write_categories(
+    template: WireRecipeTemplate,
+    field_name: str,
+    index: int,
+    role_fields: set[str],
+) -> tuple[WB1WriteCategory, ...]:
+    categories: list[WB1WriteCategory] = []
+    if index in template.wb1_record_defaults:
+        categories.append("template_raw_index")
+    if field_name in template.record_defaults:
+        categories.append("template_shared")
+    if field_name in role_fields:
+        categories.append("template_role")
+    if field_name in {"role_code", "group_no"}:
+        categories.append("dynamic_ordering")
+    if field_name in {"wire_seq", "point_seq"}:
+        categories.append("dynamic_ordering")
+    if field_name in {"bond_x", "bond_y", "bond_z"}:
+        categories.append("dynamic_geometry")
+    if field_name == "bond_angle" and template.bond_angle_mode == "wire_vector":
+        categories.append("dynamic_geometry")
+    if field_name in {"camera_x", "camera_y", "camera_z"}:
+        categories.append("hardcoded_zero")
+    if not categories:
+        categories.append("prototype_copy")
+    return tuple(categories)
+
+
 __all__ = [
     "DxfAvailability",
     "RX2000_WB1_FIELD_SOURCES",
+    "WB1WriteCategory",
     "WB1FieldSourceInfo",
+    "WB1WritePlanItem",
+    "build_wb1_write_plan",
+    "current_j_segment_dxf_fields",
+    "current_j_segment_write_plan",
+    "missing_required_wb1_j_fields",
+    "required_wb1_j_fields",
+    "summarize_wb1_template_health",
     "rx2000_fields_available_from_dxf",
     "rx2000_fields_currently_written_from_dxf",
 ]

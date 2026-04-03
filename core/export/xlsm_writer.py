@@ -112,7 +112,7 @@ class XLSMWriter:
                 "xl/workbook.xml": _xml_bytes(workbook_tree),
                 "xl/_rels/workbook.xml.rels": _xml_bytes(workbook_rels_tree),
                 "[Content_Types].xml": _xml_bytes(content_types_tree),
-                worksheet_path: _xml_bytes(_build_coordinate_worksheet(ordered_wires)),
+                worksheet_path: _xml_bytes(_build_coordinate_worksheet(ordered_wires, default_z=template.default_z)),
             }
             wb_sheet_replacement = self._build_wb_sheet_replacement(
                 archive,
@@ -213,7 +213,11 @@ class XLSMWriter:
         return _xml_bytes(worksheet)
 
 
-def _build_coordinate_worksheet(ordered_wires: list[OrderedWireRecord]) -> ET.Element:
+def _build_coordinate_worksheet(
+    ordered_wires: list[OrderedWireRecord],
+    *,
+    default_z: float,
+) -> ET.Element:
     worksheet = ET.Element(_qn(MAIN_NS, "worksheet"))
     rows = [COORDINATE_HEADERS]
     for record in ordered_wires:
@@ -226,10 +230,10 @@ def _build_coordinate_worksheet(ordered_wires: list[OrderedWireRecord]) -> ET.El
                 record.second_point_seq,
                 record.geometry.first_point.x,
                 record.geometry.first_point.y,
-                record.geometry.first_point.z,
+                record.geometry.first_point.resolved_z(default_z),
                 record.geometry.second_point.x,
                 record.geometry.second_point.y,
-                record.geometry.second_point.z,
+                record.geometry.second_point.resolved_z(default_z),
                 record.geometry.length,
                 record.geometry.angle_deg,
             )

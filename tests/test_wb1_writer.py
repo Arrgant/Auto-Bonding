@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from core.export.wb1_field_sources import (
+    build_wb1_write_plan,
+    current_j_segment_dxf_fields,
+    current_j_segment_write_plan,
+)
 from core.export.wb1_writer import WB1Writer
 from core.export.wire_models import OrderedWireRecord, WireGeometry, WireOrderingConfig, WirePoint
 from core.export.wire_recipe_models import WireRecipeTemplate
@@ -325,20 +330,155 @@ def test_wb1_writer_can_optionally_derive_bond_angle_from_wire_vector_plus_90(tm
     assert lines[3] == "0002,0001,0087,"
 
 
+def test_wb1_writer_preserves_explicit_zero_z_instead_of_falling_back_to_template_default(tmp_path):
+    template_path = tmp_path / "z-template.WB1"
+    template_path.write_text(
+        "\n".join(
+            [
+                "0000,5A2E5742310000,",
+                "J,",
+                "0000,0000,0000,0000,0000,",
+                "0002,0000,0000,0000,0000,",
+                "Q",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    template = WireRecipeTemplate(
+        template_id="z",
+        name="Z",
+        wb1_template_path=str(template_path),
+        coord_scale=10.0,
+        default_z=7.0,
+        wb1_field_map={
+            "role_code": 0,
+            "wire_seq": 1,
+            "bond_x": 2,
+            "bond_y": 3,
+            "bond_z": 4,
+        },
+    )
+
+    ordered_wires = [
+        OrderedWireRecord(
+            wire_id="W0400",
+            wire_seq=1,
+            group_no=1,
+            first_point_seq=1,
+            second_point_seq=2,
+            geometry=_wire_geometry("W0400", (0.0, 0.0), (1.0, 1.0), first_z=0.0, second_z=1.5),
+        )
+    ]
+
+    lines = WB1Writer().render(ordered_wires, template, output_name="Z.WB1").splitlines()
+
+    assert lines[2] == "0000,0001,0000,0000,0000,"
+    assert lines[3] == "0002,0001,000A,000A,000F,"
+
+
+def test_wb1_writer_rejects_non_ascii_output_name_for_machine_header(tmp_path):
+    template_path = tmp_path / "name-template.WB1"
+    template_path.write_text(
+        "\n".join(
+            [
+                "0000,4E414D452E5742310000,",
+                "J,",
+                "0000,0000,",
+                "0002,0000,",
+                "Q",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    template = WireRecipeTemplate(
+        template_id="name",
+        name="Name",
+        wb1_template_path=str(template_path),
+        wb1_field_map={"role_code": 0},
+    )
+
+    ordered_wires = [
+        OrderedWireRecord(
+            wire_id="W0500",
+            wire_seq=1,
+            group_no=1,
+            first_point_seq=1,
+            second_point_seq=2,
+            geometry=_wire_geometry("W0500", (0.0, 0.0), (1.0, 0.0)),
+        )
+    ]
+
+    try:
+        WB1Writer().render(ordered_wires, template, output_name="零件.WB1")
+    except ValueError as exc:
+        assert "ASCII" in str(exc)
+    else:
+        raise AssertionError("Expected non-ASCII WB1 output name to be rejected.")
+
+
+def test_write_plan_lists_current_j_segment_sources_for_rx2000_template():
+    from core.export.wire_recipe_defaults import build_rx2000_default_template
+
+    template = build_rx2000_default_template()
+
+    j_plan = current_j_segment_write_plan(template)
+    dxf_fields = current_j_segment_dxf_fields(template)
+
+    assert any(item.segment == "J" and item.index == 38 and item.field_name == "bond_x" for item in j_plan)
+    assert any(item.segment == "J" and item.index == 40 and item.field_name == "bond_y" for item in j_plan)
+    assert any(item.segment == "J" and item.index == 42 and item.field_name == "bond_z" for item in j_plan)
+    assert any(item.segment == "J" and item.index == 19 and item.field_name == "group_no" for item in j_plan)
+    assert any(item.segment == "J" and item.index == 32 and item.field_name == "camera_x" for item in j_plan)
+
+    dxf_field_names = {item.field_name for item in dxf_fields}
+    assert {"role_code", "group_no", "bond_x", "bond_y", "bond_z"} <= dxf_field_names
+    assert "camera_x" not in dxf_field_names
+
+
+def test_write_plan_includes_header_filename_and_header_override_locations():
+    template_path = None
+    template = WireRecipeTemplate(
+        template_id="plan",
+        name="Plan",
+        wb1_template_path=template_path,
+        header_defaults={"PRE:1:2": 45, "H:0:5": 1},
+        wb1_field_map={"role_code": 0, "bond_x": 38},
+    )
+
+    plan = build_wb1_write_plan(template)
+
+    assert plan[0].segment == "PRE"
+    assert plan[0].location == "line0:filename"
+    assert any(item.location == "PRE:1:2" and item.segment == "PRE" for item in plan)
+    assert any(item.location == "H:0:5" and item.segment == "H" for item in plan)
+
+
 def _wire_geometry(
     wire_id: str,
     first_xy: tuple[float, float],
     second_xy: tuple[float, float],
     *,
     angle_deg: float = 0.0,
+    first_z: float | None = None,
+    second_z: float | None = None,
 ) -> WireGeometry:
-    first_point = WirePoint(point_id=f"{wire_id}-P1", wire_id=wire_id, role="first", x=first_xy[0], y=first_xy[1])
+    first_point = WirePoint(
+        point_id=f"{wire_id}-P1",
+        wire_id=wire_id,
+        role="first",
+        x=first_xy[0],
+        y=first_xy[1],
+        z=first_z,
+    )
     second_point = WirePoint(
         point_id=f"{wire_id}-P2",
         wire_id=wire_id,
         role="second",
         x=second_xy[0],
         y=second_xy[1],
+        z=second_z,
     )
     return WireGeometry(
         wire_id=wire_id,

@@ -2,10 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
+import xml.etree.ElementTree as ET
 
-from core.export import WireProductionExporter
+from core.export import (
+    WireProductionExporter,
+    missing_required_wb1_j_fields,
+    required_wb1_j_fields,
+)
 from core.export.wire_models import WireGeometry, WireOrderingConfig, WirePoint
 from core.export.wire_recipe_models import WireRecipeTemplate
+
+MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 
 def test_wire_production_exporter_writes_both_outputs(tmp_path):
@@ -59,6 +66,10 @@ def test_wire_production_exporter_writes_both_outputs(tmp_path):
 
     with ZipFile(result.xlsm_path) as archive:
         assert "xl/worksheets/sheet2.xml" in archive.namelist()
+        sheet_xml = ET.fromstring(archive.read("xl/worksheets/sheet2.xml"))
+        cell_map = _worksheet_cell_map(sheet_xml)
+        assert cell_map["H2"] == "0"
+        assert cell_map["K2"] == "0"
 
 
 def test_wire_production_exporter_reports_validation_issues(tmp_path):
@@ -81,6 +92,97 @@ def test_wire_production_exporter_reports_validation_issues(tmp_path):
     assert "Base file name is required." in issues
     assert any(issue.startswith("WB1 template not found:") for issue in issues)
     assert "XLSM template path is required for XLSM export." in issues
+
+
+def test_wire_production_exporter_rejects_invalid_windows_filename_characters(tmp_path):
+    template = WireRecipeTemplate(
+        template_id="demo",
+        name="Demo",
+        wb1_template_path=str(tmp_path / "sample.WB1"),
+    )
+
+    issues = WireProductionExporter().validate_export_request(
+        [_wire_geometry("W0001", (0.0, 0.0), (1.0, 0.0))],
+        template,
+        base_name='PART:01',
+        export_wb1=True,
+        export_xlsm=False,
+    )
+
+    assert "Base file name contains Windows-reserved characters: <>:\"/\\|?*" in issues
+
+
+def test_wire_production_exporter_rejects_non_ascii_wb1_base_name(tmp_path):
+    wb1_template = tmp_path / "sample.WB1"
+    wb1_template.write_text("0000,53414D504C452E5742310000,\nJ,\n0000,\n0002,\nQ\n", encoding="utf-8")
+
+    template = WireRecipeTemplate(
+        template_id="demo",
+        name="Demo",
+        wb1_template_path=str(wb1_template),
+    )
+
+    issues = WireProductionExporter().validate_export_request(
+        [_wire_geometry("W0001", (0.0, 0.0), (1.0, 0.0))],
+        template,
+        base_name="零件01",
+        export_wb1=True,
+        export_xlsm=False,
+    )
+
+    assert "WB1-compatible base file name must use ASCII characters only." in issues
+
+
+def test_wire_production_exporter_rejects_missing_required_j_geometry_fields(tmp_path):
+    wb1_template = tmp_path / "sample.WB1"
+    wb1_template.write_text("0000,53414D504C452E5742310000,\nJ,\n0000,\n0002,\nQ\n", encoding="utf-8")
+
+    template = WireRecipeTemplate(
+        template_id="demo",
+        name="Demo",
+        wb1_template_path=str(wb1_template),
+        wb1_field_map={"role_code": 0, "bond_x": 1},
+    )
+
+    issues = WireProductionExporter().validate_export_request(
+        [_wire_geometry("W0001", (0.0, 0.0), (1.0, 0.0))],
+        template,
+        base_name="PART001",
+        export_wb1=True,
+        export_xlsm=False,
+    )
+
+    assert "WB1 field map is missing required J fields for the current export mode: bond_y." in issues
+
+
+def test_wire_production_exporter_requires_group_and_angle_fields_when_modes_need_them(tmp_path):
+    wb1_template = tmp_path / "sample.WB1"
+    wb1_template.write_text("0000,53414D504C452E5742310000,\nJ,\n0000,\n0002,\nQ\n", encoding="utf-8")
+
+    template = WireRecipeTemplate(
+        template_id="demo",
+        name="Demo",
+        wb1_template_path=str(wb1_template),
+        ordering=WireOrderingConfig(group_mode="clustered"),
+        bond_angle_mode="wire_vector",
+        wb1_field_map={"role_code": 0, "bond_x": 1, "bond_y": 2},
+    )
+
+    assert required_wb1_j_fields(template) == ("role_code", "bond_x", "bond_y", "group_no", "bond_angle")
+    assert missing_required_wb1_j_fields(template) == ("group_no", "bond_angle")
+
+    issues = WireProductionExporter().validate_export_request(
+        [_wire_geometry("W0001", (0.0, 0.0), (1.0, 0.0))],
+        template,
+        base_name="PART001",
+        export_wb1=True,
+        export_xlsm=False,
+    )
+
+    assert (
+        "WB1 field map is missing required J fields for the current export mode: group_no, bond_angle."
+        in issues
+    )
 
 
 def _build_minimal_xlsm_template(path: Path) -> None:
@@ -139,3 +241,18 @@ def _wire_geometry(wire_id: str, first_xy: tuple[float, float], second_xy: tuple
         angle_deg=0.0,
         bbox=(min(first_xy[0], second_xy[0]), min(first_xy[1], second_xy[1]), max(first_xy[0], second_xy[0]), max(first_xy[1], second_xy[1])),
     )
+
+
+def _worksheet_cell_map(worksheet: ET.Element) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for row in worksheet.findall(f".//{{{MAIN_NS}}}row"):
+        for cell in row.findall(f"{{{MAIN_NS}}}c"):
+            ref = cell.attrib.get("r", "")
+            value_node = cell.find(f"{{{MAIN_NS}}}v")
+            if value_node is not None and value_node.text is not None:
+                values[ref] = value_node.text
+                continue
+            text_node = cell.find(f".//{{{MAIN_NS}}}t")
+            if text_node is not None and text_node.text is not None:
+                values[ref] = text_node.text
+    return values

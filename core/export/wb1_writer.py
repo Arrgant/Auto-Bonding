@@ -118,7 +118,7 @@ class WB1Writer:
         _set_field(fields, field_map, "point_seq", point_seq)
         _set_field(fields, field_map, "bond_x", _scaled_coord(point.x, template.coord_scale))
         _set_field(fields, field_map, "bond_y", _scaled_coord(point.y, template.coord_scale))
-        _set_field(fields, field_map, "bond_z", _scaled_coord(point.z or template.default_z, template.coord_scale))
+        _set_field(fields, field_map, "bond_z", _scaled_coord(point.resolved_z(template.default_z), template.coord_scale))
         if template.bond_angle_mode == "wire_vector":
             _set_field(fields, field_map, "bond_angle", _wire_vector_angle_word(ordered_record))
         _set_field(fields, field_map, "camera_x", 0)
@@ -184,8 +184,16 @@ def _replace_filename_header(line: str, output_name: str) -> str:
     tokens = [token for token in line.split(",") if token]
     if len(tokens) < 2 or tokens[0] != "0000":
         return line
-    filename_hex = output_name.encode("ascii", errors="ignore").hex().upper() + "0000"
+    filename_hex = _encode_filename_header_token(output_name)
     return f"{tokens[0]},{filename_hex},"
+
+
+def _encode_filename_header_token(output_name: str) -> str:
+    try:
+        encoded = output_name.encode("ascii", errors="strict")
+    except UnicodeEncodeError as exc:
+        raise ValueError("WB1 output name must be ASCII so the machine header can store it safely.") from exc
+    return encoded.hex().upper() + "0000"
 
 
 def _ensure_record_capacity(

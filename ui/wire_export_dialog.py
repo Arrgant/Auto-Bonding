@@ -33,10 +33,15 @@ from PySide6.QtWidgets import (
 )
 
 from core.export import (
+    WireExtractionAudit,
     WireProductionExporter,
     WireRecipeTemplate,
     WireOrderingConfig,
+    build_wire_merge_proposals,
     build_rx2000_default_template,
+    extract_wire_geometries_with_audit,
+    summarize_wb1_template_health,
+    write_wire_extraction_audit_report,
 )
 from services import ProjectDocument, WireRecipeTemplateStore
 
@@ -89,6 +94,94 @@ def _coerce_numeric_scalar(value: Any, fallback: float = 0.0) -> float:
         return fallback
 
 
+def format_preview_point(x: float, y: float, z: float | None, default_z: float) -> str:
+    """Format one preview coordinate triplet using the effective export Z."""
+
+    resolved_z = default_z if z is None else z
+    return f"{x:.3f}, {y:.3f}, {resolved_z:.3f}"
+
+
+def build_template_health_text(template: WireRecipeTemplate) -> str:
+    """Render a short multi-line template health summary for the dialog."""
+
+    messages = summarize_wb1_template_health(template)
+    if not messages:
+        return "Ready."
+    return "\n".join(messages)
+
+
+def build_wire_extraction_health_text(
+    audit: WireExtractionAudit,
+    *,
+    max_examples: int = 3,
+) -> str:
+    """Render a short summary of 06_wire extraction completeness diagnostics."""
+
+    if not audit.wire_layers:
+        return "No wire-semantic layers are mapped yet."
+
+    messages = [
+        f"Wire extraction: {audit.extracted_wire_count} final path(s) from "
+        f"{audit.raw_candidate_wire_count} raw path candidate(s) in "
+        f"{', '.join(audit.wire_layers)}."
+    ]
+    layer_stats = [
+        f"{entity_type}={audit.wire_layer_entity_type_counts.get(entity_type, 0)}"
+        for entity_type in ("LINE", "LWPOLYLINE", "POLYLINE", "INSERT", "ARC", "SPLINE")
+    ]
+    messages.append("06_wire entity stats: " + ", ".join(layer_stats) + ".")
+    messages.append(
+        f"Pad-filtered paths: {audit.pad_filtered_wire_count}. "
+        f"Merged wire paths: {audit.pre_merge_wire_path_count}->{audit.extracted_wire_count}."
+    )
+    if audit.skipped_entities:
+        skipped_parts = [
+            f"{reason}={count}"
+            for reason, count in sorted(audit.skipped_counts_by_reason.items())
+        ]
+        messages.append("Skipped wire-layer entities: " + ", ".join(skipped_parts) + ".")
+        skipped_examples = [
+            f"#{item.entity_index} {item.entity_type} {item.reason}"
+            for item in audit.skipped_entities[:max_examples]
+        ]
+        messages.append("Skipped examples: " + "; ".join(skipped_examples) + ".")
+    if audit.merge_candidates:
+        messages.append(
+            f"Potential split-wire joins: {len(audit.merge_candidates)} endpoint pair(s)."
+        )
+        conflict_candidates = [
+            item
+            for item in audit.merge_candidates
+            if item.endpoint_alignment == "same_role_conflict"
+        ]
+        if conflict_candidates:
+            messages.append(
+                f"Direction conflicts at shared endpoints: {len(conflict_candidates)} pair(s)."
+            )
+        merge_examples = [
+            f"{item.first_wire_id}({item.first_endpoint_role}) <-> "
+            f"{item.second_wire_id}({item.second_endpoint_role}) "
+            f"@ ({item.shared_x:.3f}, {item.shared_y:.3f}) "
+            f"[{item.endpoint_alignment}]"
+            for item in audit.merge_candidates[:max_examples]
+        ]
+        messages.append("Join examples: " + "; ".join(merge_examples) + ".")
+        proposal_examples = []
+        for proposal in build_wire_merge_proposals(audit)[:max_examples]:
+            reverse_text = (
+                "none"
+                if not proposal.reverse_wire_ids
+                else ", ".join(proposal.reverse_wire_ids)
+            )
+            proposal_examples.append(
+                f"{proposal.source_wire_id}->{proposal.target_wire_id} "
+                f"{proposal.action} reverse={reverse_text}"
+            )
+        if proposal_examples:
+            messages.append("Merge suggestions: " + "; ".join(proposal_examples) + ".")
+    return "\n".join(messages)
+
+
 class WireExportDialog(QDialog):
     """Edit wire export templates and choose one export action."""
 
@@ -115,6 +208,10 @@ class WireExportDialog(QDialog):
         self._template_ids_by_index: list[str] = []
         self._current_template_id: str | None = None
         self._current_header_defaults: dict[str, Any] = {}
+        _wires, self._wire_extraction_audit = extract_wire_geometries_with_audit(
+            self.document.raw_entities,
+            self.document.layer_info,
+        )
         self._export_request: WireExportRequest | None = None
 
         self._build_ui()
@@ -192,6 +289,11 @@ class WireExportDialog(QDialog):
         action_row = QHBoxLayout()
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(8)
+
+        self.save_audit_report_button = QPushButton("Save Audit Report...")
+        self.save_audit_report_button.clicked.connect(self._save_audit_report)
+        action_row.addWidget(self.save_audit_report_button)
+
         action_row.addStretch(1)
 
         self.export_wb1_button = QPushButton("Export WB1")
@@ -753,6 +855,7 @@ class WireExportDialog(QDialog):
         if template is None:
             self.preview_table.setRowCount(0)
             self.preview_summary_label.setText("Preview unavailable until the JSON fields are valid.")
+            self.status_label.setText("Preview unavailable until the JSON fields are valid.")
             return
 
         ordered_records = self._production_exporter.build_ordered_records(self.document.wire_geometries, template)
@@ -766,8 +869,8 @@ class WireExportDialog(QDialog):
                 str(record.wire_seq),
                 record.wire_id,
                 str(record.group_no),
-                f"{first.x:.3f}, {first.y:.3f}, {first.z:.3f}",
-                f"{second.x:.3f}, {second.y:.3f}, {second.z:.3f}",
+                format_preview_point(first.x, first.y, first.z, template.default_z),
+                format_preview_point(second.x, second.y, second.z, template.default_z),
                 f"{record.geometry.length:.3f}",
                 f"{record.geometry.angle_deg:.2f}",
             ]
@@ -782,6 +885,14 @@ class WireExportDialog(QDialog):
             )
         else:
             self.preview_summary_label.setText("No wire geometries are available in the current document.")
+        self.status_label.setText(
+            "\n".join(
+                [
+                    build_wire_extraction_health_text(self._wire_extraction_audit),
+                    build_template_health_text(template),
+                ]
+            )
+        )
 
     def _accept_export(self, *, export_wb1: bool, export_xlsm: bool) -> None:
         if not self.document.wire_geometries:
@@ -818,6 +929,23 @@ class WireExportDialog(QDialog):
         )
         self.accept()
 
+    def _save_audit_report(self) -> None:
+        default_name = f"{self.document.path.stem}_wire_audit.txt"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save wire extraction audit",
+            str(self.output_directory / default_name),
+            "Text Files (*.txt);;All Files (*)",
+        )
+        if not path:
+            return
+
+        report_path = write_wire_extraction_audit_report(
+            self._wire_extraction_audit,
+            path,
+        )
+        self.status_label.setText(f"Saved wire extraction audit report to {report_path}.")
+
     def _build_starter_template(self) -> WireRecipeTemplate:
         starter = build_rx2000_default_template()
         return WireRecipeTemplate(
@@ -853,4 +981,11 @@ class WireExportDialog(QDialog):
         return json.dumps(payload, indent=2, sort_keys=True)
 
 
-__all__ = ["WireExportDialog", "WireExportRequest"]
+__all__ = [
+    "WireExportDialog",
+    "WireExportRequest",
+    "build_template_health_text",
+    "build_wire_extraction_health_text",
+    "format_preview_point",
+    "merge_rx2000_common_pfile_fields",
+]
