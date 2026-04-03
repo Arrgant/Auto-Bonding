@@ -45,7 +45,6 @@ from core.semantic import (
 from services import LayerSemanticPresetStore, ProjectDocument, WireRecipeTemplateStore
 
 from .import_worker import ImportWorker
-from .layer_config_dialog import LayerConfigDialog
 from .layer_thickness_dialog import LayerThicknessDialog
 from .layer_semantic_preset_dialog import LayerSemanticPresetDialog
 from .stack_preview_worker import StackPreviewWorker
@@ -72,7 +71,6 @@ class MainWindow(QMainWindow):
         self._stack_preview_thread: QThread | None = None
         self._stack_preview_worker: StackPreviewWorker | None = None
         self._pending_import_config: dict[str, Any] | None = None
-        self._pending_layer_setup_message: str | None = None
         self._auto_build_after_preview = False
         self._skip_next_walkthrough = False
         self._layer_walkthrough_queue: list[str] = []
@@ -183,20 +181,13 @@ class MainWindow(QMainWindow):
             "Import DXF",
             self._import_file,
         )
-        self.layers_button = self._build_icon_button(
-            self._make_toolbar_icon("layers"),
-            "Import Layers",
-            self._open_layer_setup,
-        )
         self.export_button = self._build_menu_button(
             self._make_toolbar_icon("export"),
             "Export",
         )
 
         layout.addWidget(self.import_button)
-        layout.addWidget(self.layers_button)
         layout.addWidget(self.export_button)
-        self._refresh_layer_setup_button()
         return top
 
     def _build_icon_button(self, icon: QIcon, label: str, handler) -> QToolButton:
@@ -512,7 +503,6 @@ class MainWindow(QMainWindow):
         )
         self.progress.setRange(0, 0)
         self.import_button.setEnabled(False)
-        self.layers_button.setEnabled(False)
         self.export_button.setEnabled(False)
         self._set_import_actions_enabled(False)
 
@@ -536,93 +526,6 @@ class MainWindow(QMainWindow):
             "enabled_layers": set(self.document.enabled_layers),
             "layer_mapping_overrides": dict(self.document.layer_mapping_overrides),
         }
-
-    def _layer_setup_metrics(
-        self,
-        layer_info: list[dict[str, Any]],
-        enabled_layers: set[str],
-        layer_mapping_overrides: dict[str, str],
-    ) -> tuple[int, int, int]:
-        populated_names = {
-            str(layer["name"])
-            for layer in layer_info
-            if int(layer.get("entity_count", 0)) > 0
-        }
-        scope_names = populated_names or {str(layer["name"]) for layer in layer_info}
-        imported_count = len(scope_names & set(enabled_layers))
-        skipped_count = max(len(scope_names) - imported_count, 0)
-        remapped_count = len(layer_mapping_overrides)
-        return imported_count, skipped_count, remapped_count
-
-    def _format_layer_setup_summary(self, imported_count: int, skipped_count: int, remapped_count: int) -> str:
-        parts = [f"{imported_count} imported"]
-        if skipped_count:
-            parts.append(f"{skipped_count} skipped")
-        if remapped_count:
-            parts.append(f"{remapped_count} remapped")
-        return ", ".join(parts)
-
-    def _refresh_layer_setup_button(self) -> None:
-        self.layers_button.setText("Import Layers")
-        if self.document is None:
-            self.layers_button.setToolTip(
-                "Choose which DXF layers are imported and how they map into layer roles."
-            )
-            return
-
-        imported_count, skipped_count, remapped_count = self._layer_setup_metrics(
-            self.document.layer_info,
-            set(self.document.enabled_layers),
-            dict(self.document.layer_mapping_overrides),
-        )
-        summary = self._format_layer_setup_summary(imported_count, skipped_count, remapped_count)
-        self.layers_button.setToolTip(
-            "Choose which DXF layers are imported before thickness and 3D build.\n"
-            f"Current scope: {summary}. The left Layers panel only hides or shows imported layers."
-        )
-
-    def _open_layer_setup(self) -> None:
-        if self.document is None:
-            QMessageBox.information(self, "Import Layers", "Import a DXF file first.")
-            return
-
-        dialog = LayerConfigDialog(
-            self.document.layer_info,
-            enabled_layers=self.document.enabled_layers,
-            layer_mapping_overrides=self.document.layer_mapping_overrides,
-            parent=self,
-        )
-        if dialog.exec() != dialog.DialogCode.Accepted:
-            return
-
-        payload = dialog.result_payload()
-        if not payload["enabled_layers"]:
-            QMessageBox.warning(self, "Import Layers", "Select at least one enabled layer.")
-            return
-
-        current_settings = self._current_layer_settings()
-        if (
-            payload["enabled_layers"] == current_settings["enabled_layers"]
-            and payload["layer_mapping_overrides"] == current_settings["layer_mapping_overrides"]
-        ):
-            self._set_status_message(
-                "Import layer rules unchanged.",
-                stage="Layers",
-                tone="good",
-                file_name=self.document.path.name,
-            )
-            return
-
-        imported_count, skipped_count, remapped_count = self._layer_setup_metrics(
-            self.document.layer_info,
-            set(payload["enabled_layers"]),
-            dict(payload["layer_mapping_overrides"]),
-        )
-        self._pending_layer_setup_message = (
-            "Import layers updated: "
-            f"{self._format_layer_setup_summary(imported_count, skipped_count, remapped_count)}."
-        )
-        self._load_document(self.document.path, layer_settings=payload, preview_only=True)
 
     def _open_semantic_preset_manager(self) -> None:
         dialog = LayerSemanticPresetDialog(self.layer_semantic_store.list_presets(), self)
@@ -812,7 +715,6 @@ class MainWindow(QMainWindow):
         self._layer_walkthrough_queue = ordered_layers
         self._layer_walkthrough_index = -1
         self._layer_walkthrough_active = True
-        self.layers_button.setEnabled(False)
         QTimer.singleShot(0, self._advance_layer_walkthrough)
 
     def _finish_layer_walkthrough(self) -> None:
@@ -844,7 +746,6 @@ class MainWindow(QMainWindow):
         self.layer_panel.load_document(self.document)
         if self.document.stack_preview_assembly is not None:
             self.model_preview.load_document(self.document)
-        self.layers_button.setEnabled(self._import_thread is None)
 
         if should_start_final_build and next_path is not None and next_layer_settings is not None:
             self._skip_next_walkthrough = True
@@ -1020,28 +921,16 @@ class MainWindow(QMainWindow):
         populated_layers = [
             layer for layer in self.document.layer_info if layer.get("enabled", True) and layer.get("entity_count", 0) > 0
         ]
-        layer_setup_message = self._pending_layer_setup_message
-        self._pending_layer_setup_message = None
         if self._skip_next_walkthrough:
-            detail = (
-                f"{layer_setup_message} Building the 3D model."
-                if layer_setup_message
-                else f"{len(populated_layers)} imported layers ready. Generating the 3D model."
-            )
             self._set_status_message(
-                detail,
+                f"{len(populated_layers)} imported layers ready. Generating the 3D model.",
                 stage="Building",
                 tone="busy",
                 file_name=file_path.name,
             )
         else:
-            detail = (
-                f"{layer_setup_message} Thickness walkthrough is ready."
-                if layer_setup_message
-                else f"{len(populated_layers)} imported layers ready. Configure thickness layer by layer."
-            )
             self._set_status_message(
-                detail,
+                f"{len(populated_layers)} imported layers ready. Configure thickness layer by layer.",
                 stage="2D Ready",
                 tone="warn",
                 file_name=file_path.name,
@@ -1202,7 +1091,6 @@ class MainWindow(QMainWindow):
 
     def _handle_import_failure(self, file_path_str: str, error_message: str) -> None:
         file_path = Path(file_path_str)
-        self._pending_layer_setup_message = None
         if self.document is not None and self.document.path == file_path and self.document.raw_entities:
             QMessageBox.warning(self, "3D generation failed", error_message)
             self._set_status_message(
@@ -1222,7 +1110,6 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.import_button.setEnabled(True)
-        self.layers_button.setEnabled(bool(self.document))
         self.export_button.setEnabled(self._has_exportable_outputs())
         self.model_preview.hide_build_progress()
 
@@ -1262,8 +1149,6 @@ class MainWindow(QMainWindow):
                     preview_only=False,
                 ),
             )
-        elif not self._layer_walkthrough_active:
-            self.layers_button.setEnabled(self.document is not None)
 
     def closeEvent(self, event) -> None:  # pragma: no cover - GUI teardown path
         if self._import_worker is not None:
@@ -1281,11 +1166,7 @@ class MainWindow(QMainWindow):
         self.preview.load_document(self.document)
         self.layer_panel.load_document(self.document)
         self.model_preview.load_document(self.document)
-        self._refresh_layer_setup_button()
         self._set_import_actions_enabled(self._import_thread is None)
-        self.layers_button.setEnabled(
-            self.document is not None and self._import_thread is None and not self._layer_walkthrough_active
-        )
         self.export_button.setEnabled(self._has_exportable_outputs())
 
     def _has_exportable_outputs(self) -> bool:
