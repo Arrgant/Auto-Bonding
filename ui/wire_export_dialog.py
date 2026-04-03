@@ -40,6 +40,7 @@ from core.export import (
     build_rx2000_default_template,
     extract_wire_geometries_with_audit,
     summarize_wb1_template_health,
+    write_wire_extraction_audit_report,
 )
 from services import ProjectDocument, WireRecipeTemplateStore
 
@@ -264,6 +265,11 @@ class WireExportDialog(QDialog):
         action_row = QHBoxLayout()
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(8)
+
+        self.save_audit_report_button = QPushButton("Save Audit Report...")
+        self.save_audit_report_button.clicked.connect(self._save_audit_report)
+        action_row.addWidget(self.save_audit_report_button)
+
         action_row.addStretch(1)
 
         self.export_wb1_button = QPushButton("Export WB1")
@@ -898,6 +904,23 @@ class WireExportDialog(QDialog):
             export_xlsm=export_xlsm,
         )
         self.accept()
+
+    def _save_audit_report(self) -> None:
+        default_name = f"{self.document.path.stem}_wire_audit.txt"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save wire extraction audit",
+            str(self.output_directory / default_name),
+            "Text Files (*.txt);;All Files (*)",
+        )
+        if not path:
+            return
+
+        report_path = write_wire_extraction_audit_report(
+            self._wire_extraction_audit,
+            path,
+        )
+        self.status_label.setText(f"Saved wire extraction audit report to {report_path}.")
 
     def _build_starter_template(self) -> WireRecipeTemplate:
         starter = build_rx2000_default_template()

@@ -25,6 +25,7 @@ from .wire_extraction import (
     extract_wire_geometries,
     extract_wire_geometries_with_audit,
     format_wire_extraction_audit_report,
+    write_wire_extraction_audit_report,
 )
 from .wire_models import OrderedWireRecord, WireGeometry, WireOrderingConfig, WirePoint
 from .wire_production_exporter import WireProductionExporter, WireProductionExportResult
@@ -69,6 +70,7 @@ __all__ = [
     "extract_wire_geometries",
     "extract_wire_geometries_with_audit",
     "format_wire_extraction_audit_report",
+    "write_wire_extraction_audit_report",
     "order_wire_geometries",
     "rx2000_fields_available_from_dxf",
     "rx2000_fields_currently_written_from_dxf",

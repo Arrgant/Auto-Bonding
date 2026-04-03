@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from ..raw_dxf_types import LayerInfo, Point2D, RawArcEntity, RawEntity, RawLWPolylineEntity, RawLineEntity
@@ -307,6 +308,18 @@ def format_wire_extraction_audit_report(audit: WireExtractionAudit) -> str:
     return "\n".join(lines) + "\n"
 
 
+def write_wire_extraction_audit_report(
+    audit: WireExtractionAudit,
+    output_path: str | Path,
+) -> Path:
+    """Write one wire extraction audit report and return the resolved path."""
+
+    target_path = Path(output_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(format_wire_extraction_audit_report(audit), encoding="utf-8")
+    return target_path
+
+
 def _merge_endpoint_alignment(
     first_role: str,
     second_role: str,
@@ -324,4 +337,5 @@ __all__ = [
     "extract_wire_geometries",
     "extract_wire_geometries_with_audit",
     "format_wire_extraction_audit_report",
+    "write_wire_extraction_audit_report",
 ]

@@ -8,6 +8,7 @@ from core.export import (
     extract_wire_geometries_with_audit,
     format_wire_extraction_audit_report,
     order_wire_geometries,
+    write_wire_extraction_audit_report,
 )
 
 
@@ -235,3 +236,18 @@ def test_format_wire_extraction_audit_report_lists_skips_and_conflicts_first():
         "- W0001(second) <-> W0003(second) @ (10.000000, 0.000000) [same_role_conflict]\n"
         "- W0004(second) <-> W0005(first) @ (110.000000, 0.000000) [continuous]\n"
     )
+
+
+def test_write_wire_extraction_audit_report_writes_report_text(tmp_path):
+    _wires, audit = extract_wire_geometries_with_audit(
+        [
+            {"type": "LINE", "start": (0.0, 0.0), "end": (1.0, 0.0), "layer": "06_wire"},
+            {"type": "POINT", "location": (2.0, 2.0), "layer": "06_wire"},
+        ],
+        [{"name": "06_wire", "mapped_type": "wire", "suggested_role": "wire"}],
+    )
+
+    output_path = write_wire_extraction_audit_report(audit, tmp_path / "audit" / "wire.txt")
+
+    assert output_path == tmp_path / "audit" / "wire.txt"
+    assert output_path.read_text(encoding="utf-8") == format_wire_extraction_audit_report(audit)
