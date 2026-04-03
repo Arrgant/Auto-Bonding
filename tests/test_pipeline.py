@@ -72,6 +72,30 @@ def test_preview_stage_can_be_promoted_to_prepared_document(tmp_path):
     assert payload["wire_geometries"] == preview["wire_geometries"]
 
 
+def test_prepare_document_from_preview_can_defer_drc_report(tmp_path):
+    document = ezdxf.new("R2010")
+    modelspace = document.modelspace()
+    modelspace.add_line((0, 0), (5, 0), dxfattribs={"layer": "WIRE"})
+
+    file_path = tmp_path / "deferred_drc_payload.dxf"
+    document.saveas(file_path)
+
+    preview = load_import_preview(file_path)
+    payload = prepare_document_from_preview(
+        preview,
+        {
+            "mode": "standard",
+            "default_wire_diameter": 0.025,
+            "default_material": "gold",
+            "defer_drc_report": True,
+        },
+    )
+
+    assert payload["drc_report"]["passed"] is True
+    assert payload["drc_report"]["total_violations"] == 0
+    assert "Deferred detailed DRC during import for faster loading." in payload["note"]
+
+
 def test_group_elements_by_layer_uses_numeric_first_sort():
     elements = [
         BondingElement("wire", "10_ROUTE", {}, {}),

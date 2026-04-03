@@ -11,9 +11,26 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from core import BondingDiagramConverter, PreparedDocument, RawImportPreview, load_import_preview
 from core.layer_colors import build_layer_color_map
+from core.layer_stack import layer_supports_stacked_preview
 from core.pipeline_types import LayerMeshPayload
 from core.pipeline import finalize_prepared_document, group_elements_by_layer, resolve_preview_elements
 from ui.widgets.mesh_payload import build_mesh_payload
+
+
+def _should_defer_layer_geometry(
+    layer_name: str,
+    layer_info: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> bool:
+    """Keep expensive wire-like layers in 2D during import when fast mode is enabled."""
+
+    if not bool(config.get("defer_wire_geometry")):
+        return False
+
+    for layer in layer_info:
+        if str(layer.get("name", "")) == layer_name:
+            return not layer_supports_stacked_preview(layer)
+    return False
 
 
 class ImportWorker(QObject):
@@ -51,6 +68,7 @@ class ImportWorker(QObject):
             assembly = cq.Assembly()
             converted_counts: Counter[str] = Counter()
             layer_meshes: list[LayerMeshPayload] = []
+            deferred_layers: list[str] = []
             scene_rect = preview["scene_rect"]
             center_override = (
                 float(scene_rect[0] + (scene_rect[2] / 2.0)),
@@ -64,28 +82,33 @@ class ImportWorker(QObject):
             )
 
             for completed_layers, (layer_name, layer_elements) in enumerate(layer_groups, start=1):
-                layer_assembly = converter.convert_elements(layer_elements)
-                self._merge_assembly(assembly, layer_assembly)
                 converted_counts.update(element.element_type for element in layer_elements)
-                mesh_bytes, vertex_count, diagonal = build_mesh_payload(
-                    layer_assembly,
-                    "coarse",
-                    center_override=center_override,
-                    diagonal_override=diagonal_override,
-                )
-                if vertex_count > 0:
-                    layer_meshes.append(
-                        {
-                            "layer_name": layer_name,
-                            "color_hex": layer_colors.get(layer_name, "#E8E8E8"),
-                            "mesh_bytes": mesh_bytes,
-                            "vertex_count": vertex_count,
-                            "diagonal": diagonal,
-                        }
+                deferred = _should_defer_layer_geometry(layer_name, preview["layer_info"], self._config)
+                if deferred:
+                    deferred_layers.append(layer_name)
+                else:
+                    layer_assembly = converter.convert_elements(layer_elements)
+                    self._merge_assembly(assembly, layer_assembly)
+                    mesh_bytes, vertex_count, diagonal = build_mesh_payload(
+                        layer_assembly,
+                        "coarse",
+                        center_override=center_override,
+                        diagonal_override=diagonal_override,
                     )
+                    if vertex_count > 0:
+                        layer_meshes.append(
+                            {
+                                "layer_name": layer_name,
+                                "color_hex": layer_colors.get(layer_name, "#E8E8E8"),
+                                "mesh_bytes": mesh_bytes,
+                                "vertex_count": vertex_count,
+                                "diagonal": diagonal,
+                            }
+                        )
                 self.progress_ready.emit(
                     str(self._file_path),
                     {
+                        "deferred": deferred,
                         "layer_name": layer_name,
                         "completed_layers": completed_layers,
                         "total_layers": len(layer_groups),
@@ -101,6 +124,11 @@ class ImportWorker(QObject):
                 used_fallback=used_fallback,
             )
             prepared["layer_meshes"] = layer_meshes
+            if deferred_layers:
+                deferred_labels = ", ".join(deferred_layers)
+                prepared["note"] = (
+                    f"{prepared['note']} Kept {deferred_labels} in 2D during import for faster loading."
+                )
         except Exception as exc:
             self.failed.emit(str(self._file_path), str(exc))
             return

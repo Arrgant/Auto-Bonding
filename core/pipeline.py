@@ -34,6 +34,17 @@ def _mode_to_drc(mode_name: str) -> DRCMode:
     return mapping.get(mode_name, DRCMode.STANDARD)
 
 
+def _empty_drc_report() -> DRCReport:
+    return {
+        "passed": True,
+        "total_violations": 0,
+        "errors": 0,
+        "warnings": 0,
+        "violations": [],
+        "info": 0,
+    }
+
+
 def build_conversion_artifacts(file_path: Path, config: dict[str, Any]) -> tuple[list[BondingElement], Any, bool]:
     parser = DXFParser()
     converter = BondingDiagramConverter(config)
@@ -127,8 +138,11 @@ def finalize_prepared_document(
     if len(coordinates) <= 2:
         coordinates = extract_coordinates_from_raw_entities(raw_entities)
 
-    checker = DRCChecker(mode=_mode_to_drc(str(config.get("mode", "standard"))))
-    drc_report = build_drc_report(checker, assembly, elements)
+    if bool(config.get("defer_drc_report")):
+        drc_report = _empty_drc_report()
+    else:
+        checker = DRCChecker(mode=_mode_to_drc(str(config.get("mode", "standard"))))
+        drc_report = build_drc_report(checker, assembly, elements)
     populated_layers = [layer for layer in layer_info if layer.get("entity_count", 0) > 0]
     mapped_layers = [layer for layer in populated_layers if layer.get("mapped_type")]
     if used_fallback:
@@ -141,6 +155,8 @@ def finalize_prepared_document(
             f"Parsed DXF with {len(mapped_layers)} mapped layers "
             f"across {len(populated_layers)} populated layers."
         )
+    if bool(config.get("defer_drc_report")):
+        note = f"{note} Deferred detailed DRC during import for faster loading."
 
     return {
         "raw_entities": raw_entities,

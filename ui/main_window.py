@@ -31,6 +31,7 @@ from core import (
     PreparedDocument,
     RawImportPreview,
     WireProductionExporter,
+    infer_elements_from_raw_entities,
 )
 from core.layer_colors import build_layer_color_map
 from core.layer_semantics import apply_layer_role_overrides
@@ -461,6 +462,8 @@ class MainWindow(QMainWindow):
             "mode": "standard",
             "default_wire_diameter": 0.025,
             "default_material": "gold",
+            "defer_wire_geometry": True,
+            "defer_drc_report": True,
             "export_format": "STEP",
             "preview_only": preview_only,
         }
@@ -969,26 +972,73 @@ class MainWindow(QMainWindow):
         completed_layers = int(progress_payload.get("completed_layers", 0))
         total_layers = max(int(progress_payload.get("total_layers", 0)), 1)
         layer_name = str(progress_payload.get("layer_name", ""))
+        deferred = bool(progress_payload.get("deferred"))
         self.document.note = f"Generating the stacked model from layer {completed_layers}/{total_layers}: {layer_name}."
         progress_value = 35 + int((completed_layers / total_layers) * 50)
         self.progress.setRange(0, 100)
         self.progress.setValue(min(progress_value, 90))
+        if deferred:
+            progress_label = f"Fast import: keeping {layer_name} in 2D"
+            self.document.note = f"Keeping {layer_name} in 2D during import to avoid a heavy wire rebuild."
+            placeholder_text = "Skipping heavy wire mesh during import"
+        else:
+            progress_label = f"3D layer {completed_layers}/{total_layers}: {layer_name}"
+            placeholder_text = f"Building layer {completed_layers}/{total_layers}"
         self._set_status_message(
-            f"3D layer {completed_layers}/{total_layers}: {layer_name}",
+            progress_label,
             stage="Building",
             tone="busy",
             file_name=file_path.name,
         )
         self.model_preview.show_build_progress(
-            f"3D layer {completed_layers}/{total_layers}: {layer_name}",
+            progress_label,
             value=min(progress_value, 90),
             maximum=100,
         )
-        self.model_preview.surface.placeholder.set_content(
-            "3D Preview",
-            f"Building layer {completed_layers}/{total_layers}",
-        )
+        self.model_preview.surface.placeholder.set_content("3D Preview", placeholder_text)
         self.model_preview.surface.placeholder.set_action(None)
+
+    def _assembly_contains_element_type(self, assembly: object | None, element_type: str) -> bool:
+        if assembly is None:
+            return False
+
+        pending = list(getattr(assembly, "children", []))
+        while pending:
+            node = pending.pop()
+            metadata = getattr(node, "metadata", {}) or {}
+            if metadata.get("element_type") == element_type:
+                return True
+            pending.extend(getattr(node, "children", []))
+        return False
+
+    def _resolve_export_elements(self) -> list[Any]:
+        if self.document is None:
+            return []
+        if self.document.parser_elements:
+            return list(self.document.parser_elements)
+        return infer_elements_from_raw_entities(self.document.raw_entities, self._config())
+
+    def _full_step_export_assembly(self) -> object | None:
+        if self.document is None or self.document.assembly is None:
+            return None
+
+        if not self.document.wire_geometries or self._assembly_contains_element_type(self.document.assembly, "wire"):
+            return self.document.assembly
+
+        self._set_status_message(
+            "Preparing full wire geometry for STEP export.",
+            stage="Export",
+            tone="busy",
+        )
+        elements = self._resolve_export_elements()
+        if not elements:
+            return self.document.assembly
+
+        full_config = dict(self._config())
+        full_config["defer_wire_geometry"] = False
+        assembly = BondingDiagramConverter(full_config).convert_elements(elements)
+        self.document.assembly = assembly
+        return assembly
 
     def _handle_import_success(self, file_path_str: str, prepared: PreparedDocument) -> None:
         file_path = Path(file_path_str)
@@ -1633,8 +1683,13 @@ class MainWindow(QMainWindow):
         if not output_path:
             return
 
+        assembly = self._full_step_export_assembly()
+        if assembly is None:
+            QMessageBox.critical(self, "Export STEP", "No 3D model is available for export.")
+            return
+
         converter = BondingDiagramConverter(self._config())
-        if not converter.export_step(self.document.assembly, output_path):
+        if not converter.export_step(assembly, output_path):
             QMessageBox.critical(self, "Export STEP", "Failed to export the STEP model.")
             return
 
