@@ -85,4 +85,19 @@ def test_build_wire_extraction_health_text_reports_missing_and_partial_extractio
     assert "Skipped wire-layer entities: unsupported_entity_type=1." in text
     assert "Skipped examples: #1 POINT unsupported_entity_type." in text
     assert "Potential split-wire joins: 1 endpoint pair(s)." in text
-    assert "Join examples: W0001(second) <-> W0003(first) @ (1.000, 0.000)." in text
+    assert "Join examples: W0001(second) <-> W0003(first) @ (1.000, 0.000) [continuous]." in text
+
+
+def test_build_wire_extraction_health_text_marks_same_role_direction_conflicts():
+    _wires, audit = extract_wire_geometries_with_audit(
+        [
+            {"type": "LINE", "start": (0.0, 0.0), "end": (1.0, 0.0), "layer": "06_wire"},
+            {"type": "LINE", "start": (2.0, 0.0), "end": (1.0, 0.0), "layer": "06_wire"},
+        ],
+        [{"name": "06_wire", "mapped_type": "wire", "suggested_role": "wire"}],
+    )
+
+    text = build_wire_extraction_health_text(audit)
+
+    assert "Direction conflicts at shared endpoints: 1 pair(s)." in text
+    assert "Join examples: W0001(second) <-> W0002(second) @ (1.000, 0.000) [same_role_conflict]." in text

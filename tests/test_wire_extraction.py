@@ -162,10 +162,11 @@ def test_extract_wire_geometries_with_audit_reports_two_segment_merge_candidates
             item.shared_y,
             item.first_endpoint_role,
             item.second_endpoint_role,
+            item.endpoint_alignment,
         )
         for item in audit.merge_candidates
     ] == [
-        ("W0001", "W0002", 10.0, 0.0, "second", "first"),
+        ("W0001", "W0002", 10.0, 0.0, "second", "first", "continuous"),
     ]
 
 
@@ -180,3 +181,26 @@ def test_extract_wire_geometries_with_audit_ignores_branch_junctions_as_merge_ca
     _wires, audit = extract_wire_geometries_with_audit(raw_entities, layer_info)
 
     assert audit.merge_candidates == ()
+
+
+def test_extract_wire_geometries_with_audit_flags_same_role_merge_direction_conflicts():
+    raw_entities = [
+        {"type": "LINE", "start": (0.0, 0.0), "end": (10.0, 0.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (20.0, 5.0), "end": (10.0, 0.0), "layer": "06_wire"},
+    ]
+    layer_info = [{"name": "06_wire", "mapped_type": "wire", "suggested_role": "wire"}]
+
+    _wires, audit = extract_wire_geometries_with_audit(raw_entities, layer_info)
+
+    assert [
+        (
+            item.first_wire_id,
+            item.second_wire_id,
+            item.first_endpoint_role,
+            item.second_endpoint_role,
+            item.endpoint_alignment,
+        )
+        for item in audit.merge_candidates
+    ] == [
+        ("W0001", "W0002", "second", "second", "same_role_conflict"),
+    ]

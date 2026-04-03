@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Literal
 
 from ..raw_dxf_types import LayerInfo, Point2D, RawArcEntity, RawEntity, RawLWPolylineEntity, RawLineEntity
 from .wire_models import WireGeometry, WirePoint
+
+
+WireMergeEndpointAlignment = Literal["continuous", "same_role_conflict"]
 
 
 @dataclass(frozen=True)
@@ -42,6 +46,7 @@ class WireExtractionMergeCandidate:
     shared_y: float
     first_endpoint_role: str
     second_endpoint_role: str
+    endpoint_alignment: WireMergeEndpointAlignment
 
 
 def extract_wire_geometries(
@@ -243,16 +248,27 @@ def _find_merge_candidates(
                 shared_y=(first_xy[1] + second_xy[1]) / 2.0,
                 first_endpoint_role=first_role,
                 second_endpoint_role=second_role,
+                endpoint_alignment=_merge_endpoint_alignment(first_role, second_role),
             )
         )
 
     return tuple(candidates)
 
 
+def _merge_endpoint_alignment(
+    first_role: str,
+    second_role: str,
+) -> WireMergeEndpointAlignment:
+    if first_role == second_role:
+        return "same_role_conflict"
+    return "continuous"
+
+
 __all__ = [
     "WireExtractionAudit",
     "WireExtractionMergeCandidate",
     "WireExtractionSkippedEntity",
+    "WireMergeEndpointAlignment",
     "extract_wire_geometries",
     "extract_wire_geometries_with_audit",
 ]

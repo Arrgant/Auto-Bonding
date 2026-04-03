@@ -137,10 +137,20 @@ def build_wire_extraction_health_text(
         messages.append(
             f"Potential split-wire joins: {len(audit.merge_candidates)} endpoint pair(s)."
         )
+        conflict_candidates = [
+            item
+            for item in audit.merge_candidates
+            if item.endpoint_alignment == "same_role_conflict"
+        ]
+        if conflict_candidates:
+            messages.append(
+                f"Direction conflicts at shared endpoints: {len(conflict_candidates)} pair(s)."
+            )
         merge_examples = [
             f"{item.first_wire_id}({item.first_endpoint_role}) <-> "
             f"{item.second_wire_id}({item.second_endpoint_role}) "
-            f"@ ({item.shared_x:.3f}, {item.shared_y:.3f})"
+            f"@ ({item.shared_x:.3f}, {item.shared_y:.3f}) "
+            f"[{item.endpoint_alignment}]"
             for item in audit.merge_candidates[:max_examples]
         ]
         messages.append("Join examples: " + "; ".join(merge_examples) + ".")
