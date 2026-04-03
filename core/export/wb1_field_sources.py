@@ -545,6 +545,27 @@ def current_j_segment_dxf_fields(template: WireRecipeTemplate) -> tuple[WB1Write
     return tuple(item for item in current_j_segment_write_plan(template) if item.writes_from_dxf)
 
 
+def required_wb1_j_fields(template: WireRecipeTemplate) -> tuple[str, ...]:
+    """Return the J-segment field names the current export mode cannot safely omit."""
+
+    required: list[str] = ["role_code", "bond_x", "bond_y"]
+    if template.ordering.group_mode == "clustered":
+        required.append("group_no")
+    if template.bond_angle_mode == "wire_vector":
+        required.append("bond_angle")
+    return tuple(required)
+
+
+def missing_required_wb1_j_fields(template: WireRecipeTemplate) -> tuple[str, ...]:
+    """Return required J fields missing from the current template field map."""
+
+    return tuple(
+        field_name
+        for field_name in required_wb1_j_fields(template)
+        if field_name not in template.wb1_field_map
+    )
+
+
 def _j_field_write_categories(
     template: WireRecipeTemplate,
     field_name: str,
@@ -582,6 +603,8 @@ __all__ = [
     "build_wb1_write_plan",
     "current_j_segment_dxf_fields",
     "current_j_segment_write_plan",
+    "missing_required_wb1_j_fields",
+    "required_wb1_j_fields",
     "rx2000_fields_available_from_dxf",
     "rx2000_fields_currently_written_from_dxf",
 ]

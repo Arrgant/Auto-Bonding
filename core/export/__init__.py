@@ -9,6 +9,8 @@ from .wb1_field_sources import (
     build_wb1_write_plan,
     current_j_segment_dxf_fields,
     current_j_segment_write_plan,
+    missing_required_wb1_j_fields,
+    required_wb1_j_fields,
     rx2000_fields_available_from_dxf,
     rx2000_fields_currently_written_from_dxf,
 )
@@ -42,6 +44,8 @@ __all__ = [
     "build_wb1_write_plan",
     "current_j_segment_dxf_fields",
     "current_j_segment_write_plan",
+    "missing_required_wb1_j_fields",
+    "required_wb1_j_fields",
     "WireProductionExporter",
     "WireProductionExportResult",
     "WireGeometry",

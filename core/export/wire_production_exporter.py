@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .wb1_field_sources import missing_required_wb1_j_fields
 from .wb1_writer import WB1Writer
 from .wire_models import OrderedWireRecord, WireGeometry
 from .wire_ordering import order_wire_geometries
@@ -114,7 +115,7 @@ class WireProductionExporter:
             issues.append("Base file name contains Windows-reserved characters: <>:\"/\\|?*")
         elif base_name != base_name.strip() or base_name.endswith("."):
             issues.append("Base file name cannot start/end with spaces or end with a period.")
-        elif _requires_ascii_wb1_name(template, export_wb1=export_wb1, export_xlsm=export_xlsm) and not _is_ascii_filename(
+        elif _requires_wb1_render(template, export_wb1=export_wb1, export_xlsm=export_xlsm) and not _is_ascii_filename(
             f"{base_name}.WB1"
         ):
             issues.append("WB1-compatible base file name must use ASCII characters only.")
@@ -128,6 +129,14 @@ class WireProductionExporter:
             issues.append("XLSM template path is required for XLSM export.")
         if export_xlsm and template.xlsm_template_path and not Path(template.xlsm_template_path).exists():
             issues.append(f"XLSM template not found: {template.xlsm_template_path}")
+        if _requires_wb1_render(template, export_wb1=export_wb1, export_xlsm=export_xlsm):
+            missing_fields = missing_required_wb1_j_fields(template)
+            if missing_fields:
+                issues.append(
+                    "WB1 field map is missing required J fields for the current export mode: "
+                    + ", ".join(missing_fields)
+                    + "."
+                )
         return issues
 
 
@@ -143,7 +152,7 @@ def _is_ascii_filename(file_name: str) -> bool:
     return True
 
 
-def _requires_ascii_wb1_name(
+def _requires_wb1_render(
     template: WireRecipeTemplate,
     *,
     export_wb1: bool,

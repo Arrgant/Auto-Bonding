@@ -4,7 +4,11 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 import xml.etree.ElementTree as ET
 
-from core.export import WireProductionExporter
+from core.export import (
+    WireProductionExporter,
+    missing_required_wb1_j_fields,
+    required_wb1_j_fields,
+)
 from core.export.wire_models import WireGeometry, WireOrderingConfig, WirePoint
 from core.export.wire_recipe_models import WireRecipeTemplate
 
@@ -127,6 +131,58 @@ def test_wire_production_exporter_rejects_non_ascii_wb1_base_name(tmp_path):
     )
 
     assert "WB1-compatible base file name must use ASCII characters only." in issues
+
+
+def test_wire_production_exporter_rejects_missing_required_j_geometry_fields(tmp_path):
+    wb1_template = tmp_path / "sample.WB1"
+    wb1_template.write_text("0000,53414D504C452E5742310000,\nJ,\n0000,\n0002,\nQ\n", encoding="utf-8")
+
+    template = WireRecipeTemplate(
+        template_id="demo",
+        name="Demo",
+        wb1_template_path=str(wb1_template),
+        wb1_field_map={"role_code": 0, "bond_x": 1},
+    )
+
+    issues = WireProductionExporter().validate_export_request(
+        [_wire_geometry("W0001", (0.0, 0.0), (1.0, 0.0))],
+        template,
+        base_name="PART001",
+        export_wb1=True,
+        export_xlsm=False,
+    )
+
+    assert "WB1 field map is missing required J fields for the current export mode: bond_y." in issues
+
+
+def test_wire_production_exporter_requires_group_and_angle_fields_when_modes_need_them(tmp_path):
+    wb1_template = tmp_path / "sample.WB1"
+    wb1_template.write_text("0000,53414D504C452E5742310000,\nJ,\n0000,\n0002,\nQ\n", encoding="utf-8")
+
+    template = WireRecipeTemplate(
+        template_id="demo",
+        name="Demo",
+        wb1_template_path=str(wb1_template),
+        ordering=WireOrderingConfig(group_mode="clustered"),
+        bond_angle_mode="wire_vector",
+        wb1_field_map={"role_code": 0, "bond_x": 1, "bond_y": 2},
+    )
+
+    assert required_wb1_j_fields(template) == ("role_code", "bond_x", "bond_y", "group_no", "bond_angle")
+    assert missing_required_wb1_j_fields(template) == ("group_no", "bond_angle")
+
+    issues = WireProductionExporter().validate_export_request(
+        [_wire_geometry("W0001", (0.0, 0.0), (1.0, 0.0))],
+        template,
+        base_name="PART001",
+        export_wb1=True,
+        export_xlsm=False,
+    )
+
+    assert (
+        "WB1 field map is missing required J fields for the current export mode: group_no, bond_angle."
+        in issues
+    )
 
 
 def _build_minimal_xlsm_template(path: Path) -> None:
