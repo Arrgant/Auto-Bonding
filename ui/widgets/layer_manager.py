@@ -6,7 +6,7 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout
 
 from core.layer_semantics import format_layer_role
-from core.layer_stack import layer_sort_key
+from core.layer_stack import layer_sort_key, layer_supports_stacked_preview
 from services import ProjectDocument
 
 
@@ -25,11 +25,16 @@ class _LayerRowWidget(QFrame):
         layer_color: str,
         thickness_label: str,
         is_visible: bool,
+        thickness_editable: bool,
     ):
         super().__init__()
         self.setObjectName("LayerRowCard")
         self.setProperty("selected", False)
-        self.setToolTip(f"{layer_name}\nRole: {role_label}\nDouble-click to set thickness.")
+        self._thickness_editable = thickness_editable
+        if thickness_editable:
+            self.setToolTip(f"{layer_name}\nRole: {role_label}\nDouble-click to set thickness.")
+        else:
+            self.setToolTip(f"{layer_name}\nRole: {role_label}\nThis layer does not participate in stacked 3D preview.")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         layout = QHBoxLayout(self)
@@ -86,7 +91,7 @@ class _LayerRowWidget(QFrame):
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # pragma: no cover
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and self._thickness_editable:
             self.selected.emit()
             self.thickness_requested.emit()
             event.accept()
@@ -297,14 +302,19 @@ class LayerManagerPanel(QFrame):
             )
             item.setData(0, Qt.ItemDataRole.UserRole, layer_name)
             role_label = format_layer_role(layer.get("suggested_role") or layer.get("mapped_type"))
+            thickness_editable = layer_supports_stacked_preview(layer)
             thickness = document.layer_thicknesses.get(layer_name)
-            thickness_label = "Set" if thickness is None else f"{thickness:.3f}"
+            if thickness_editable:
+                thickness_label = "Set" if thickness is None else f"{thickness:.3f}"
+            else:
+                thickness_label = "N/A"
             row_widget = _LayerRowWidget(
                 layer_name=layer_name,
                 role_label=role_label,
                 layer_color=document.layer_colors.get(layer_name, "#D45B2E"),
                 thickness_label=thickness_label,
                 is_visible=layer_name in visible_layers,
+                thickness_editable=thickness_editable,
             )
             row_widget.selected.connect(lambda row=item: self.tree.setCurrentItem(row))
             row_widget.visibility_toggled.connect(

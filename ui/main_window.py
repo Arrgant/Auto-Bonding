@@ -34,7 +34,7 @@ from core import (
 )
 from core.layer_colors import build_layer_color_map
 from core.layer_semantics import apply_layer_role_overrides
-from core.layer_stack import build_stacked_preview_assembly, layer_sort_key
+from core.layer_stack import build_stacked_preview_assembly, layer_sort_key, stack_preview_layer_names
 from core.semantic import (
     MANUAL_REVIEW_KIND_OPTIONS,
     SemanticClassificationResult,
@@ -697,11 +697,17 @@ class MainWindow(QMainWindow):
         if self.document is None:
             return []
 
+        preview_layers = stack_preview_layer_names(self.document.layer_info)
         return [
             str(layer["name"])
             for layer in sorted(self.document.layer_info, key=lambda item: layer_sort_key(str(item["name"])))
-            if layer.get("enabled", True) and layer.get("entity_count", 0) > 0
+            if str(layer["name"]) in preview_layers
         ]
+
+    def _layer_affects_stack_preview(self, layer_name: str | None) -> bool:
+        if self.document is None or not isinstance(layer_name, str):
+            return False
+        return layer_name in stack_preview_layer_names(self.document.layer_info)
 
     def _start_layer_walkthrough(self) -> None:
         if self.document is None:
@@ -1305,7 +1311,7 @@ class MainWindow(QMainWindow):
         self.document.selected_semantic_key = semantic_key
         self.document.selected_entity_index = selected_index
 
-        if visibility_changed and (
+        if self._layer_affects_stack_preview(layer_name if isinstance(layer_name, str) else None) and (
             self.document.stack_preview_assembly is not None
             or self.document.layer_thicknesses
             or self.document.entity_thicknesses
@@ -1467,7 +1473,11 @@ class MainWindow(QMainWindow):
 
         self.preview.load_document(self.document)
         self.layer_panel.load_document(self.document)
-        if self.document.stack_preview_assembly is not None or self.document.layer_thicknesses or self.document.entity_thicknesses:
+        if self._layer_affects_stack_preview(layer_name) and (
+            self.document.stack_preview_assembly is not None
+            or self.document.layer_thicknesses
+            or self.document.entity_thicknesses
+        ):
             self._rebuild_stack_preview()
 
     def _handle_layer_selected(self, layer_name: object) -> None:
@@ -1498,6 +1508,12 @@ class MainWindow(QMainWindow):
 
     def _edit_layer_thickness(self, layer_name: str) -> None:
         if self.document is None:
+            return
+        if not self._layer_affects_stack_preview(layer_name):
+            self._set_status_message(
+                f"Layer {layer_name} is excluded from the stacked 3D preview.",
+                stage="Layers",
+            )
             return
 
         current = float(self.document.layer_thicknesses.get(layer_name, 0.2))

@@ -10,6 +10,8 @@ import cadquery as cq
 
 from .raw_dxf_types import LayerInfo, RawEntity
 
+STACK_PREVIEW_EXCLUDED_ROLES = {"bond_point", "wire"}
+
 
 def layer_sort_key(layer_name: str) -> tuple[int, str]:
     """Sort by leading numeric marker first, then by layer name."""
@@ -35,6 +37,32 @@ def sort_entities_by_layer(raw_entities: list[RawEntity], layer_order: dict[str,
     indexed = list(enumerate(raw_entities))
     indexed.sort(key=lambda item: (layer_order.get(str(item[1].get("layer", "0")), 10**9), item[0]))
     return indexed
+
+
+def _layer_role(layer: LayerInfo) -> str | None:
+    role = layer.get("suggested_role") or layer.get("mapped_type")
+    if not isinstance(role, str) or not role:
+        return None
+    return role
+
+
+def layer_supports_stacked_preview(layer: LayerInfo) -> bool:
+    """Return whether the layer should participate in the stacked 3D preview."""
+
+    role = _layer_role(layer)
+    return role not in STACK_PREVIEW_EXCLUDED_ROLES
+
+
+def stack_preview_layer_names(layer_info: list[LayerInfo]) -> set[str]:
+    """Return enabled/populated layer names that should participate in stacked preview."""
+
+    return {
+        str(layer["name"])
+        for layer in layer_info
+        if layer.get("enabled", True)
+        and layer.get("entity_count", 0) > 0
+        and layer_supports_stacked_preview(layer)
+    }
 
 
 def _is_supported_closed_entity(entity: RawEntity) -> bool:
@@ -86,6 +114,8 @@ def build_stacked_preview_assembly(
         if thickness > 0
     }
     visible_layer_filter = set(visible_layers) if visible_layers is not None else None
+    preview_layer_filter = stack_preview_layer_names(layer_info)
+    known_layer_names = {str(layer["name"]) for layer in layer_info}
 
     if not positive_assignments and not positive_layer_assignments:
         return None
@@ -96,6 +126,8 @@ def build_stacked_preview_assembly(
     for entity_index, entity in enumerate(raw_entities):
         layer_name = str(entity.get("layer", "0"))
         if visible_layer_filter is not None and layer_name not in visible_layer_filter:
+            continue
+        if layer_name in known_layer_names and layer_name not in preview_layer_filter:
             continue
         if not _is_supported_closed_entity(entity):
             continue
@@ -130,6 +162,8 @@ def build_stacked_preview_assembly(
 __all__ = [
     "build_layer_order_map",
     "build_stacked_preview_assembly",
+    "layer_supports_stacked_preview",
     "layer_sort_key",
     "sort_entities_by_layer",
+    "stack_preview_layer_names",
 ]

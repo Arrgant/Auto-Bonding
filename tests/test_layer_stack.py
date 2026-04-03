@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from core.layer_stack import build_layer_order_map, build_stacked_preview_assembly, layer_sort_key
+from core.layer_stack import (
+    build_layer_order_map,
+    build_stacked_preview_assembly,
+    layer_sort_key,
+    stack_preview_layer_names,
+)
 
 
 def test_layer_sort_key_prefers_leading_numbers():
@@ -149,3 +154,42 @@ def test_build_stacked_preview_assembly_uses_layer_thicknesses_and_visibility():
     bbox = assembly.toCompound().BoundingBox()
     assert bbox.zlen >= 0.8
     assert bbox.zlen < 1.1
+
+
+def test_stack_preview_layer_names_skips_wire_layers():
+    layer_info = [
+        {
+            "name": "04_pad",
+            "color": 1,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": "die_pad",
+            "suggested_role": "pad",
+            "enabled": True,
+            "entity_count": 4,
+            "entity_types": {"LWPOLYLINE": 4},
+        },
+        {
+            "name": "06_wire",
+            "color": 3,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": "wire",
+            "suggested_role": "wire",
+            "enabled": True,
+            "entity_count": 40,
+            "entity_types": {"LWPOLYLINE": 40},
+        },
+    ]
+
+    names = stack_preview_layer_names(layer_info)
+
+    assert names == {"04_pad"}
