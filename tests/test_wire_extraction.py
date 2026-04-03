@@ -25,6 +25,8 @@ def test_extract_wire_geometries_filters_to_wire_layers_and_assigns_ids():
     assert wire.second_point.point_id == "W0001-P2"
     assert wire.first_point.x == 0.0
     assert wire.second_point.x == 10.0
+    assert wire.first_point.z is None
+    assert wire.second_point.z is None
     assert math.isclose(wire.length, 10.0)
     assert math.isclose(wire.angle_deg, 0.0)
     assert wire.bbox == (0.0, 0.0, 10.0, 0.0)

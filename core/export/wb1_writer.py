@@ -118,7 +118,7 @@ class WB1Writer:
         _set_field(fields, field_map, "point_seq", point_seq)
         _set_field(fields, field_map, "bond_x", _scaled_coord(point.x, template.coord_scale))
         _set_field(fields, field_map, "bond_y", _scaled_coord(point.y, template.coord_scale))
-        _set_field(fields, field_map, "bond_z", _scaled_coord(point.z or template.default_z, template.coord_scale))
+        _set_field(fields, field_map, "bond_z", _scaled_coord(point.resolved_z(template.default_z), template.coord_scale))
         if template.bond_angle_mode == "wire_vector":
             _set_field(fields, field_map, "bond_angle", _wire_vector_angle_word(ordered_record))
         _set_field(fields, field_map, "camera_x", 0)

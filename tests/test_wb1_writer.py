@@ -325,20 +325,77 @@ def test_wb1_writer_can_optionally_derive_bond_angle_from_wire_vector_plus_90(tm
     assert lines[3] == "0002,0001,0087,"
 
 
+def test_wb1_writer_preserves_explicit_zero_z_instead_of_falling_back_to_template_default(tmp_path):
+    template_path = tmp_path / "z-template.WB1"
+    template_path.write_text(
+        "\n".join(
+            [
+                "0000,5A2E5742310000,",
+                "J,",
+                "0000,0000,0000,0000,0000,",
+                "0002,0000,0000,0000,0000,",
+                "Q",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    template = WireRecipeTemplate(
+        template_id="z",
+        name="Z",
+        wb1_template_path=str(template_path),
+        coord_scale=10.0,
+        default_z=7.0,
+        wb1_field_map={
+            "role_code": 0,
+            "wire_seq": 1,
+            "bond_x": 2,
+            "bond_y": 3,
+            "bond_z": 4,
+        },
+    )
+
+    ordered_wires = [
+        OrderedWireRecord(
+            wire_id="W0400",
+            wire_seq=1,
+            group_no=1,
+            first_point_seq=1,
+            second_point_seq=2,
+            geometry=_wire_geometry("W0400", (0.0, 0.0), (1.0, 1.0), first_z=0.0, second_z=1.5),
+        )
+    ]
+
+    lines = WB1Writer().render(ordered_wires, template, output_name="Z.WB1").splitlines()
+
+    assert lines[2] == "0000,0001,0000,0000,0000,"
+    assert lines[3] == "0002,0001,000A,000A,000F,"
+
+
 def _wire_geometry(
     wire_id: str,
     first_xy: tuple[float, float],
     second_xy: tuple[float, float],
     *,
     angle_deg: float = 0.0,
+    first_z: float | None = None,
+    second_z: float | None = None,
 ) -> WireGeometry:
-    first_point = WirePoint(point_id=f"{wire_id}-P1", wire_id=wire_id, role="first", x=first_xy[0], y=first_xy[1])
+    first_point = WirePoint(
+        point_id=f"{wire_id}-P1",
+        wire_id=wire_id,
+        role="first",
+        x=first_xy[0],
+        y=first_xy[1],
+        z=first_z,
+    )
     second_point = WirePoint(
         point_id=f"{wire_id}-P2",
         wire_id=wire_id,
         role="second",
         x=second_xy[0],
         y=second_xy[1],
+        z=second_z,
     )
     return WireGeometry(
         wire_id=wire_id,

@@ -89,6 +89,13 @@ def _coerce_numeric_scalar(value: Any, fallback: float = 0.0) -> float:
         return fallback
 
 
+def format_preview_point(x: float, y: float, z: float | None, default_z: float) -> str:
+    """Format one preview coordinate triplet using the effective export Z."""
+
+    resolved_z = default_z if z is None else z
+    return f"{x:.3f}, {y:.3f}, {resolved_z:.3f}"
+
+
 class WireExportDialog(QDialog):
     """Edit wire export templates and choose one export action."""
 
@@ -766,8 +773,8 @@ class WireExportDialog(QDialog):
                 str(record.wire_seq),
                 record.wire_id,
                 str(record.group_no),
-                f"{first.x:.3f}, {first.y:.3f}, {first.z:.3f}",
-                f"{second.x:.3f}, {second.y:.3f}, {second.z:.3f}",
+                format_preview_point(first.x, first.y, first.z, template.default_z),
+                format_preview_point(second.x, second.y, second.z, template.default_z),
                 f"{record.geometry.length:.3f}",
                 f"{record.geometry.angle_deg:.2f}",
             ]

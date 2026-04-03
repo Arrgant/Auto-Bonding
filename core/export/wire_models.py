@@ -22,8 +22,15 @@ class WirePoint:
     role: WirePointRole
     x: float
     y: float
-    z: float = 0.0
+    z: float | None = None
     source_entity_index: int | None = None
+
+    def resolved_z(self, default_z: float) -> float:
+        """Return the effective export Z, preserving an explicit zero value."""
+
+        if self.z is None:
+            return default_z
+        return self.z
 
 
 @dataclass(frozen=True)

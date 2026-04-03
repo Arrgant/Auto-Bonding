@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ui.wire_export_dialog import merge_rx2000_common_pfile_fields
+from ui.wire_export_dialog import format_preview_point, merge_rx2000_common_pfile_fields
 
 
 def test_merge_rx2000_common_pfile_fields_overlays_form_values_and_seeds_field_map():
@@ -22,3 +22,8 @@ def test_merge_rx2000_common_pfile_fields_overlays_form_values_and_seeds_field_m
     assert merged_field_map["custom_value"] == "Z1"
     assert merged_field_map["search_force"] == "A8"
     assert merged_field_map["h1_cutter"] == "A10"
+
+
+def test_format_preview_point_uses_default_z_only_when_point_z_is_missing():
+    assert format_preview_point(1.0, 2.0, None, 7.5) == "1.000, 2.000, 7.500"
+    assert format_preview_point(1.0, 2.0, 0.0, 7.5) == "1.000, 2.000, 0.000"

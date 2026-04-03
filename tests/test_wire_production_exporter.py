@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
+import xml.etree.ElementTree as ET
 
 from core.export import WireProductionExporter
 from core.export.wire_models import WireGeometry, WireOrderingConfig, WirePoint
 from core.export.wire_recipe_models import WireRecipeTemplate
+
+MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 
 def test_wire_production_exporter_writes_both_outputs(tmp_path):
@@ -59,6 +62,10 @@ def test_wire_production_exporter_writes_both_outputs(tmp_path):
 
     with ZipFile(result.xlsm_path) as archive:
         assert "xl/worksheets/sheet2.xml" in archive.namelist()
+        sheet_xml = ET.fromstring(archive.read("xl/worksheets/sheet2.xml"))
+        cell_map = _worksheet_cell_map(sheet_xml)
+        assert cell_map["H2"] == "0"
+        assert cell_map["K2"] == "0"
 
 
 def test_wire_production_exporter_reports_validation_issues(tmp_path):
@@ -139,3 +146,18 @@ def _wire_geometry(wire_id: str, first_xy: tuple[float, float], second_xy: tuple
         angle_deg=0.0,
         bbox=(min(first_xy[0], second_xy[0]), min(first_xy[1], second_xy[1]), max(first_xy[0], second_xy[0]), max(first_xy[1], second_xy[1])),
     )
+
+
+def _worksheet_cell_map(worksheet: ET.Element) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for row in worksheet.findall(f".//{{{MAIN_NS}}}row"):
+        for cell in row.findall(f"{{{MAIN_NS}}}c"):
+            ref = cell.attrib.get("r", "")
+            value_node = cell.find(f"{{{MAIN_NS}}}v")
+            if value_node is not None and value_node.text is not None:
+                values[ref] = value_node.text
+                continue
+            text_node = cell.find(f".//{{{MAIN_NS}}}t")
+            if text_node is not None and text_node.text is not None:
+                values[ref] = text_node.text
+    return values
