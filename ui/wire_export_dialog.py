@@ -37,6 +37,7 @@ from core.export import (
     WireProductionExporter,
     WireRecipeTemplate,
     WireOrderingConfig,
+    build_wire_merge_proposals,
     build_rx2000_default_template,
     extract_wire_geometries_with_audit,
     summarize_wb1_template_health,
@@ -155,6 +156,19 @@ def build_wire_extraction_health_text(
             for item in audit.merge_candidates[:max_examples]
         ]
         messages.append("Join examples: " + "; ".join(merge_examples) + ".")
+        proposal_examples = []
+        for proposal in build_wire_merge_proposals(audit)[:max_examples]:
+            reverse_text = (
+                "none"
+                if not proposal.reverse_wire_ids
+                else ", ".join(proposal.reverse_wire_ids)
+            )
+            proposal_examples.append(
+                f"{proposal.source_wire_id}->{proposal.target_wire_id} "
+                f"{proposal.action} reverse={reverse_text}"
+            )
+        if proposal_examples:
+            messages.append("Merge suggestions: " + "; ".join(proposal_examples) + ".")
     return "\n".join(messages)
 
 

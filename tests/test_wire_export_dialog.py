@@ -86,6 +86,7 @@ def test_build_wire_extraction_health_text_reports_missing_and_partial_extractio
     assert "Skipped examples: #1 POINT unsupported_entity_type." in text
     assert "Potential split-wire joins: 1 endpoint pair(s)." in text
     assert "Join examples: W0001(second) <-> W0003(first) @ (1.000, 0.000) [continuous]." in text
+    assert "Merge suggestions: W0001->W0003 join_as_is reverse=none." in text
 
 
 def test_build_wire_extraction_health_text_marks_same_role_direction_conflicts():
@@ -101,3 +102,4 @@ def test_build_wire_extraction_health_text_marks_same_role_direction_conflicts()
 
     assert "Direction conflicts at shared endpoints: 1 pair(s)." in text
     assert "Join examples: W0001(second) <-> W0002(second) @ (1.000, 0.000) [same_role_conflict]." in text
+    assert "Merge suggestions: W0001->W0002 reverse_second_then_join reverse=W0002." in text
