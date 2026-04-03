@@ -83,4 +83,6 @@ def test_build_wire_extraction_health_text_reports_missing_and_partial_extractio
 
     assert "Wire extraction: 2/3 candidate entities converted from 06_wire." in text
     assert "Skipped wire-layer entities: unsupported_entity_type=1." in text
+    assert "Skipped examples: #1 POINT unsupported_entity_type." in text
     assert "Potential split-wire joins: 1 endpoint pair(s)." in text
+    assert "Join examples: W0001(second) <-> W0003(first) @ (1.000, 0.000)." in text

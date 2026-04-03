@@ -108,7 +108,11 @@ def build_template_health_text(template: WireRecipeTemplate) -> str:
     return "\n".join(messages)
 
 
-def build_wire_extraction_health_text(audit: WireExtractionAudit) -> str:
+def build_wire_extraction_health_text(
+    audit: WireExtractionAudit,
+    *,
+    max_examples: int = 3,
+) -> str:
     """Render a short summary of 06_wire extraction completeness diagnostics."""
 
     if not audit.wire_layers:
@@ -124,10 +128,22 @@ def build_wire_extraction_health_text(audit: WireExtractionAudit) -> str:
             for reason, count in sorted(audit.skipped_counts_by_reason.items())
         ]
         messages.append("Skipped wire-layer entities: " + ", ".join(skipped_parts) + ".")
+        skipped_examples = [
+            f"#{item.entity_index} {item.entity_type} {item.reason}"
+            for item in audit.skipped_entities[:max_examples]
+        ]
+        messages.append("Skipped examples: " + "; ".join(skipped_examples) + ".")
     if audit.merge_candidates:
         messages.append(
             f"Potential split-wire joins: {len(audit.merge_candidates)} endpoint pair(s)."
         )
+        merge_examples = [
+            f"{item.first_wire_id}({item.first_endpoint_role}) <-> "
+            f"{item.second_wire_id}({item.second_endpoint_role}) "
+            f"@ ({item.shared_x:.3f}, {item.shared_y:.3f})"
+            for item in audit.merge_candidates[:max_examples]
+        ]
+        messages.append("Join examples: " + "; ".join(merge_examples) + ".")
     return "\n".join(messages)
 
 
