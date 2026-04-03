@@ -141,3 +141,42 @@ def test_extract_wire_geometries_with_audit_reports_skipped_wire_layer_entities(
         (2, "POINT", "unsupported_entity_type"),
         (3, "LINE", "zero_length_or_insufficient_points"),
     ]
+
+
+def test_extract_wire_geometries_with_audit_reports_two_segment_merge_candidates():
+    raw_entities = [
+        {"type": "LINE", "start": (0.0, 0.0), "end": (10.0, 0.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (10.0, 0.0), "end": (20.0, 5.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (100.0, 0.0), "end": (110.0, 0.0), "layer": "06_wire"},
+    ]
+    layer_info = [{"name": "06_wire", "mapped_type": "wire", "suggested_role": "wire"}]
+
+    wires, audit = extract_wire_geometries_with_audit(raw_entities, layer_info)
+
+    assert [wire.wire_id for wire in wires] == ["W0001", "W0002", "W0003"]
+    assert [
+        (
+            item.first_wire_id,
+            item.second_wire_id,
+            item.shared_x,
+            item.shared_y,
+            item.first_endpoint_role,
+            item.second_endpoint_role,
+        )
+        for item in audit.merge_candidates
+    ] == [
+        ("W0001", "W0002", 10.0, 0.0, "second", "first"),
+    ]
+
+
+def test_extract_wire_geometries_with_audit_ignores_branch_junctions_as_merge_candidates():
+    raw_entities = [
+        {"type": "LINE", "start": (0.0, 0.0), "end": (10.0, 0.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (10.0, 0.0), "end": (20.0, 0.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (10.0, 0.0), "end": (10.0, 10.0), "layer": "06_wire"},
+    ]
+    layer_info = [{"name": "06_wire", "mapped_type": "wire", "suggested_role": "wire"}]
+
+    _wires, audit = extract_wire_geometries_with_audit(raw_entities, layer_info)
+
+    assert audit.merge_candidates == ()

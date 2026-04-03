@@ -27,23 +27,44 @@ class WireExtractionAudit:
     extracted_wire_count: int
     candidate_entity_count: int
     skipped_entities: tuple[WireExtractionSkippedEntity, ...]
+    merge_candidates: tuple["WireExtractionMergeCandidate", ...]
     extracted_counts_by_type: dict[str, int]
     skipped_counts_by_reason: dict[str, int]
+
+
+@dataclass(frozen=True)
+class WireExtractionMergeCandidate:
+    """Two extracted wire fragments that likely belong to one multi-segment wire."""
+
+    first_wire_id: str
+    second_wire_id: str
+    shared_x: float
+    shared_y: float
+    first_endpoint_role: str
+    second_endpoint_role: str
 
 
 def extract_wire_geometries(
     raw_entities: list[RawEntity],
     layer_info: list[LayerInfo],
+    *,
+    merge_tolerance: float = 1e-6,
 ) -> list[WireGeometry]:
     """Extract deterministic wire records from wire-semantic raw entities."""
 
-    wires, _audit = extract_wire_geometries_with_audit(raw_entities, layer_info)
+    wires, _audit = extract_wire_geometries_with_audit(
+        raw_entities,
+        layer_info,
+        merge_tolerance=merge_tolerance,
+    )
     return wires
 
 
 def extract_wire_geometries_with_audit(
     raw_entities: list[RawEntity],
     layer_info: list[LayerInfo],
+    *,
+    merge_tolerance: float = 1e-6,
 ) -> tuple[list[WireGeometry], WireExtractionAudit]:
     """Extract wire records and return a skip/extract summary for diagnostics."""
 
@@ -79,6 +100,7 @@ def extract_wire_geometries_with_audit(
         extracted_wire_count=len(wires),
         candidate_entity_count=candidate_entity_count,
         skipped_entities=tuple(skipped_entities),
+        merge_candidates=_find_merge_candidates(wires, merge_tolerance=merge_tolerance),
         extracted_counts_by_type=extracted_counts_by_type,
         skipped_counts_by_reason=skipped_counts_by_reason,
     )
@@ -183,8 +205,53 @@ def _route_bbox(points: tuple[Point2D, ...]) -> tuple[float, float, float, float
     return (min(x_values), min(y_values), max(x_values), max(y_values))
 
 
+def _find_merge_candidates(
+    wires: list[WireGeometry],
+    *,
+    merge_tolerance: float,
+) -> tuple[WireExtractionMergeCandidate, ...]:
+    if not wires:
+        return ()
+
+    tolerance = max(float(merge_tolerance), 1e-12)
+    endpoint_groups: dict[tuple[str, int, int], list[tuple[WireGeometry, str, Point2D]]] = {}
+    for wire in wires:
+        for role, point in (("first", wire.first_point), ("second", wire.second_point)):
+            key = (
+                wire.layer_name,
+                int(round(point.x / tolerance)),
+                int(round(point.y / tolerance)),
+            )
+            endpoint_groups.setdefault(key, []).append((wire, role, (point.x, point.y)))
+
+    candidates: list[WireExtractionMergeCandidate] = []
+    for grouped_endpoints in endpoint_groups.values():
+        if len(grouped_endpoints) != 2:
+            continue
+        first_entry, second_entry = grouped_endpoints
+        first_wire, first_role, first_xy = first_entry
+        second_wire, second_role, second_xy = second_entry
+        if first_wire.wire_id == second_wire.wire_id:
+            continue
+        if math.dist(first_xy, second_xy) > tolerance:
+            continue
+        candidates.append(
+            WireExtractionMergeCandidate(
+                first_wire_id=first_wire.wire_id,
+                second_wire_id=second_wire.wire_id,
+                shared_x=(first_xy[0] + second_xy[0]) / 2.0,
+                shared_y=(first_xy[1] + second_xy[1]) / 2.0,
+                first_endpoint_role=first_role,
+                second_endpoint_role=second_role,
+            )
+        )
+
+    return tuple(candidates)
+
+
 __all__ = [
     "WireExtractionAudit",
+    "WireExtractionMergeCandidate",
     "WireExtractionSkippedEntity",
     "extract_wire_geometries",
     "extract_wire_geometries_with_audit",

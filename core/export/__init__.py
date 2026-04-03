@@ -20,6 +20,7 @@ from .wb1_parser import ParsedWB1Document, ParsedWB1Record, WB1Parser
 from .wb1_writer import WB1Writer
 from .wire_extraction import (
     WireExtractionAudit,
+    WireExtractionMergeCandidate,
     WireExtractionSkippedEntity,
     extract_wire_geometries,
     extract_wire_geometries_with_audit,
@@ -60,6 +61,7 @@ __all__ = [
     "WirePoint",
     "WireRecipeTemplate",
     "WireExtractionAudit",
+    "WireExtractionMergeCandidate",
     "WireExtractionSkippedEntity",
     "XLSMWriter",
     "build_rx2000_default_template",
