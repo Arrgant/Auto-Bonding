@@ -3,9 +3,32 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 from ..raw_dxf_types import LayerInfo, Point2D, RawArcEntity, RawEntity, RawLWPolylineEntity, RawLineEntity
 from .wire_models import WireGeometry, WirePoint
+
+
+@dataclass(frozen=True)
+class WireExtractionSkippedEntity:
+    """One wire-layer entity that was not converted into a wire."""
+
+    entity_index: int
+    layer_name: str
+    entity_type: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class WireExtractionAudit:
+    """Summary of which wire-layer entities were extracted or skipped."""
+
+    wire_layers: tuple[str, ...]
+    extracted_wire_count: int
+    candidate_entity_count: int
+    skipped_entities: tuple[WireExtractionSkippedEntity, ...]
+    extracted_counts_by_type: dict[str, int]
+    skipped_counts_by_reason: dict[str, int]
 
 
 def extract_wire_geometries(
@@ -14,19 +37,52 @@ def extract_wire_geometries(
 ) -> list[WireGeometry]:
     """Extract deterministic wire records from wire-semantic raw entities."""
 
+    wires, _audit = extract_wire_geometries_with_audit(raw_entities, layer_info)
+    return wires
+
+
+def extract_wire_geometries_with_audit(
+    raw_entities: list[RawEntity],
+    layer_info: list[LayerInfo],
+) -> tuple[list[WireGeometry], WireExtractionAudit]:
+    """Extract wire records and return a skip/extract summary for diagnostics."""
+
     wire_layers = _resolve_wire_layers(layer_info)
     wires: list[WireGeometry] = []
+    skipped_entities: list[WireExtractionSkippedEntity] = []
+    extracted_counts_by_type: dict[str, int] = {}
+    skipped_counts_by_reason: dict[str, int] = {}
+    candidate_entity_count = 0
 
     for entity_index, entity in enumerate(raw_entities):
         layer_name = str(entity.get("layer", "0"))
         if layer_name not in wire_layers:
             continue
 
-        wire = _extract_wire_geometry(entity_index, entity)
+        candidate_entity_count += 1
+        wire, skip_reason = _extract_wire_geometry(entity_index, entity)
         if wire is not None:
             wires.append(wire)
+            extracted_counts_by_type[wire.source_type] = extracted_counts_by_type.get(wire.source_type, 0) + 1
+            continue
+        skipped_entity = WireExtractionSkippedEntity(
+            entity_index=entity_index,
+            layer_name=layer_name,
+            entity_type=str(entity["type"]),
+            reason=skip_reason or "unsupported_entity_type",
+        )
+        skipped_entities.append(skipped_entity)
+        skipped_counts_by_reason[skipped_entity.reason] = skipped_counts_by_reason.get(skipped_entity.reason, 0) + 1
 
-    return wires
+    audit = WireExtractionAudit(
+        wire_layers=tuple(sorted(wire_layers)),
+        extracted_wire_count=len(wires),
+        candidate_entity_count=candidate_entity_count,
+        skipped_entities=tuple(skipped_entities),
+        extracted_counts_by_type=extracted_counts_by_type,
+        skipped_counts_by_reason=skipped_counts_by_reason,
+    )
+    return wires, audit
 
 
 def _resolve_wire_layers(layer_info: list[LayerInfo]) -> set[str]:
@@ -38,17 +94,28 @@ def _resolve_wire_layers(layer_info: list[LayerInfo]) -> set[str]:
     return wire_layers
 
 
-def _extract_wire_geometry(entity_index: int, entity: RawEntity) -> WireGeometry | None:
+def _extract_wire_geometry(entity_index: int, entity: RawEntity) -> tuple[WireGeometry | None, str | None]:
     entity_type = entity["type"]
     if entity_type == "LINE":
-        return _build_wire_geometry(entity_index, entity, (entity["start"], entity["end"]))
+        wire = _build_wire_geometry(entity_index, entity, (entity["start"], entity["end"]))
+        if wire is None:
+            return None, "zero_length_or_insufficient_points"
+        return wire, None
     if entity_type == "ARC":
         points = tuple(entity.get("points", []))
-        return _build_wire_geometry(entity_index, entity, points)
-    if entity_type == "LWPOLYLINE" and not bool(entity.get("closed")):
+        wire = _build_wire_geometry(entity_index, entity, points)
+        if wire is None:
+            return None, "zero_length_or_insufficient_points"
+        return wire, None
+    if entity_type == "LWPOLYLINE" and bool(entity.get("closed")):
+        return None, "closed_lwpolyline"
+    if entity_type == "LWPOLYLINE":
         points = tuple(entity.get("points", []))
-        return _build_wire_geometry(entity_index, entity, points)
-    return None
+        wire = _build_wire_geometry(entity_index, entity, points)
+        if wire is None:
+            return None, "zero_length_or_insufficient_points"
+        return wire, None
+    return None, "unsupported_entity_type"
 
 
 def _build_wire_geometry(
@@ -116,4 +183,9 @@ def _route_bbox(points: tuple[Point2D, ...]) -> tuple[float, float, float, float
     return (min(x_values), min(y_values), max(x_values), max(y_values))
 
 
-__all__ = ["extract_wire_geometries"]
+__all__ = [
+    "WireExtractionAudit",
+    "WireExtractionSkippedEntity",
+    "extract_wire_geometries",
+    "extract_wire_geometries_with_audit",
+]

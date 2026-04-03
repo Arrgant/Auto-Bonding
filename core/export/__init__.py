@@ -18,7 +18,12 @@ from .wb1_field_sources import (
 from .wb1_compare import WB1Comparer, WB1CompareResult, WB1Difference
 from .wb1_parser import ParsedWB1Document, ParsedWB1Record, WB1Parser
 from .wb1_writer import WB1Writer
-from .wire_extraction import extract_wire_geometries
+from .wire_extraction import (
+    WireExtractionAudit,
+    WireExtractionSkippedEntity,
+    extract_wire_geometries,
+    extract_wire_geometries_with_audit,
+)
 from .wire_models import OrderedWireRecord, WireGeometry, WireOrderingConfig, WirePoint
 from .wire_production_exporter import WireProductionExporter, WireProductionExportResult
 from .wire_recipe_defaults import RX2000_STARTER_WB1_FIELD_MAP, build_rx2000_default_template
@@ -54,9 +59,12 @@ __all__ = [
     "WireOrderingConfig",
     "WirePoint",
     "WireRecipeTemplate",
+    "WireExtractionAudit",
+    "WireExtractionSkippedEntity",
     "XLSMWriter",
     "build_rx2000_default_template",
     "extract_wire_geometries",
+    "extract_wire_geometries_with_audit",
     "order_wire_geometries",
     "rx2000_fields_available_from_dxf",
     "rx2000_fields_currently_written_from_dxf",

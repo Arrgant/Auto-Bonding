@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import math
 
-from core.export import WireOrderingConfig, extract_wire_geometries, order_wire_geometries
+from core.export import (
+    WireOrderingConfig,
+    extract_wire_geometries,
+    extract_wire_geometries_with_audit,
+    order_wire_geometries,
+)
 
 
 def test_extract_wire_geometries_filters_to_wire_layers_and_assigns_ids():
@@ -96,3 +101,43 @@ def test_order_wire_geometries_can_cluster_group_numbers_from_geometry():
     assert [record.wire_id for record in ordered] == ["W0001", "W0002", "W0003", "W0004"]
     assert [record.group_no for record in ordered] == [5, 5, 6, 6]
     assert [record.wire_seq for record in ordered] == [1, 2, 3, 4]
+
+
+def test_extract_wire_geometries_with_audit_reports_skipped_wire_layer_entities():
+    raw_entities = [
+        {"type": "LINE", "start": (0.0, 0.0), "end": (10.0, 0.0), "layer": "06_wire"},
+        {
+            "type": "LWPOLYLINE",
+            "points": [(0.0, 0.0), (1.0, 0.0), (0.0, 0.0)],
+            "closed": True,
+            "layer": "06_wire",
+        },
+        {"type": "POINT", "location": (2.0, 2.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (5.0, 5.0), "end": (5.0, 5.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (0.0, 1.0), "end": (10.0, 1.0), "layer": "MECH"},
+    ]
+    layer_info = [
+        {"name": "06_wire", "mapped_type": "wire", "suggested_role": "wire"},
+        {"name": "MECH", "mapped_type": None, "suggested_role": None},
+    ]
+
+    wires, audit = extract_wire_geometries_with_audit(raw_entities, layer_info)
+
+    assert [wire.wire_id for wire in wires] == ["W0001"]
+    assert audit.wire_layers == ("06_wire",)
+    assert audit.candidate_entity_count == 4
+    assert audit.extracted_wire_count == 1
+    assert audit.extracted_counts_by_type == {"LINE": 1}
+    assert audit.skipped_counts_by_reason == {
+        "closed_lwpolyline": 1,
+        "unsupported_entity_type": 1,
+        "zero_length_or_insufficient_points": 1,
+    }
+    assert [
+        (item.entity_index, item.entity_type, item.reason)
+        for item in audit.skipped_entities
+    ] == [
+        (1, "LWPOLYLINE", "closed_lwpolyline"),
+        (2, "POINT", "unsupported_entity_type"),
+        (3, "LINE", "zero_length_or_insufficient_points"),
+    ]
