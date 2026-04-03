@@ -33,10 +33,12 @@ from PySide6.QtWidgets import (
 )
 
 from core.export import (
+    WireExtractionAudit,
     WireProductionExporter,
     WireRecipeTemplate,
     WireOrderingConfig,
     build_rx2000_default_template,
+    extract_wire_geometries_with_audit,
     summarize_wb1_template_health,
 )
 from services import ProjectDocument, WireRecipeTemplateStore
@@ -106,6 +108,29 @@ def build_template_health_text(template: WireRecipeTemplate) -> str:
     return "\n".join(messages)
 
 
+def build_wire_extraction_health_text(audit: WireExtractionAudit) -> str:
+    """Render a short summary of 06_wire extraction completeness diagnostics."""
+
+    if not audit.wire_layers:
+        return "No wire-semantic layers are mapped yet."
+
+    messages = [
+        f"Wire extraction: {audit.extracted_wire_count}/{audit.candidate_entity_count} "
+        f"candidate entities converted from {', '.join(audit.wire_layers)}."
+    ]
+    if audit.skipped_entities:
+        skipped_parts = [
+            f"{reason}={count}"
+            for reason, count in sorted(audit.skipped_counts_by_reason.items())
+        ]
+        messages.append("Skipped wire-layer entities: " + ", ".join(skipped_parts) + ".")
+    if audit.merge_candidates:
+        messages.append(
+            f"Potential split-wire joins: {len(audit.merge_candidates)} endpoint pair(s)."
+        )
+    return "\n".join(messages)
+
+
 class WireExportDialog(QDialog):
     """Edit wire export templates and choose one export action."""
 
@@ -132,6 +157,10 @@ class WireExportDialog(QDialog):
         self._template_ids_by_index: list[str] = []
         self._current_template_id: str | None = None
         self._current_header_defaults: dict[str, Any] = {}
+        _wires, self._wire_extraction_audit = extract_wire_geometries_with_audit(
+            self.document.raw_entities,
+            self.document.layer_info,
+        )
         self._export_request: WireExportRequest | None = None
 
         self._build_ui()
@@ -800,7 +829,14 @@ class WireExportDialog(QDialog):
             )
         else:
             self.preview_summary_label.setText("No wire geometries are available in the current document.")
-        self.status_label.setText(build_template_health_text(template))
+        self.status_label.setText(
+            "\n".join(
+                [
+                    build_wire_extraction_health_text(self._wire_extraction_audit),
+                    build_template_health_text(template),
+                ]
+            )
+        )
 
     def _accept_export(self, *, export_wb1: bool, export_xlsm: bool) -> None:
         if not self.document.wire_geometries:
@@ -872,4 +908,11 @@ class WireExportDialog(QDialog):
         return json.dumps(payload, indent=2, sort_keys=True)
 
 
-__all__ = ["WireExportDialog", "WireExportRequest", "build_template_health_text", "format_preview_point", "merge_rx2000_common_pfile_fields"]
+__all__ = [
+    "WireExportDialog",
+    "WireExportRequest",
+    "build_template_health_text",
+    "build_wire_extraction_health_text",
+    "format_preview_point",
+    "merge_rx2000_common_pfile_fields",
+]

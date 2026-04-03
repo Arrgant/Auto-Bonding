@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from core.export import extract_wire_geometries_with_audit
 from core.export.wire_models import WireOrderingConfig
 from core.export.wire_recipe_models import WireRecipeTemplate
 from ui.wire_export_dialog import (
     build_template_health_text,
+    build_wire_extraction_health_text,
     format_preview_point,
     merge_rx2000_common_pfile_fields,
 )
@@ -59,3 +61,26 @@ def test_build_template_health_text_summarizes_current_wb1_export_mode():
     assert "Current DXF-driven J fields: role_code, bond_x, bond_y, group_no." in text
     assert "bond_z uses explicit point Z when available, otherwise template default_z." in text
     assert "camera_x/y/z currently export as 0 until camera calibration is modeled." in text
+
+
+def test_build_wire_extraction_health_text_reports_missing_and_partial_extraction_states():
+    _, no_layer_audit = extract_wire_geometries_with_audit(
+        [{"type": "LINE", "start": (0.0, 0.0), "end": (1.0, 0.0), "layer": "06_wire"}],
+        [{"name": "06_wire", "mapped_type": None, "suggested_role": None}],
+    )
+    assert build_wire_extraction_health_text(no_layer_audit) == "No wire-semantic layers are mapped yet."
+
+    _wires, audit = extract_wire_geometries_with_audit(
+        [
+            {"type": "LINE", "start": (0.0, 0.0), "end": (1.0, 0.0), "layer": "06_wire"},
+            {"type": "POINT", "location": (2.0, 2.0), "layer": "06_wire"},
+            {"type": "LINE", "start": (1.0, 0.0), "end": (2.0, 0.0), "layer": "06_wire"},
+        ],
+        [{"name": "06_wire", "mapped_type": "wire", "suggested_role": "wire"}],
+    )
+
+    text = build_wire_extraction_health_text(audit)
+
+    assert "Wire extraction: 2/3 candidate entities converted from 06_wire." in text
+    assert "Skipped wire-layer entities: unsupported_entity_type=1." in text
+    assert "Potential split-wire joins: 1 endpoint pair(s)." in text
