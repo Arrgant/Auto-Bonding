@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from core.export.wb1_field_sources import (
+    build_wb1_write_plan,
+    current_j_segment_dxf_fields,
+    current_j_segment_write_plan,
+)
 from core.export.wb1_writer import WB1Writer
 from core.export.wire_models import OrderedWireRecord, WireGeometry, WireOrderingConfig, WirePoint
 from core.export.wire_recipe_models import WireRecipeTemplate
@@ -411,6 +416,43 @@ def test_wb1_writer_rejects_non_ascii_output_name_for_machine_header(tmp_path):
         assert "ASCII" in str(exc)
     else:
         raise AssertionError("Expected non-ASCII WB1 output name to be rejected.")
+
+
+def test_write_plan_lists_current_j_segment_sources_for_rx2000_template():
+    from core.export.wire_recipe_defaults import build_rx2000_default_template
+
+    template = build_rx2000_default_template()
+
+    j_plan = current_j_segment_write_plan(template)
+    dxf_fields = current_j_segment_dxf_fields(template)
+
+    assert any(item.segment == "J" and item.index == 38 and item.field_name == "bond_x" for item in j_plan)
+    assert any(item.segment == "J" and item.index == 40 and item.field_name == "bond_y" for item in j_plan)
+    assert any(item.segment == "J" and item.index == 42 and item.field_name == "bond_z" for item in j_plan)
+    assert any(item.segment == "J" and item.index == 19 and item.field_name == "group_no" for item in j_plan)
+    assert any(item.segment == "J" and item.index == 32 and item.field_name == "camera_x" for item in j_plan)
+
+    dxf_field_names = {item.field_name for item in dxf_fields}
+    assert {"role_code", "group_no", "bond_x", "bond_y", "bond_z"} <= dxf_field_names
+    assert "camera_x" not in dxf_field_names
+
+
+def test_write_plan_includes_header_filename_and_header_override_locations():
+    template_path = None
+    template = WireRecipeTemplate(
+        template_id="plan",
+        name="Plan",
+        wb1_template_path=template_path,
+        header_defaults={"PRE:1:2": 45, "H:0:5": 1},
+        wb1_field_map={"role_code": 0, "bond_x": 38},
+    )
+
+    plan = build_wb1_write_plan(template)
+
+    assert plan[0].segment == "PRE"
+    assert plan[0].location == "line0:filename"
+    assert any(item.location == "PRE:1:2" and item.segment == "PRE" for item in plan)
+    assert any(item.location == "H:0:5" and item.segment == "H" for item in plan)
 
 
 def _wire_geometry(
