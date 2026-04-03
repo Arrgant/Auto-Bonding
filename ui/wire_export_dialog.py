@@ -9,11 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -28,6 +31,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -40,6 +44,7 @@ from core.export import (
     build_wire_merge_proposals,
     build_rx2000_default_template,
     extract_wire_geometries_with_audit,
+    missing_required_wb1_j_fields,
     summarize_wb1_template_health,
     write_wire_extraction_audit_report,
 )
@@ -99,6 +104,89 @@ def format_preview_point(x: float, y: float, z: float | None, default_z: float) 
 
     resolved_z = default_z if z is None else z
     return f"{x:.3f}, {y:.3f}, {resolved_z:.3f}"
+
+
+def format_preview_xy_lines(x: float, y: float) -> str:
+    """Format one preview coordinate pair into a compact two-line cell."""
+
+    return f"X {x:.3f}\nY {y:.3f}"
+
+
+def format_preview_point_tooltip(x: float, y: float, z: float | None, default_z: float) -> str:
+    """Format a full XYZ tooltip while preserving default-Z behavior."""
+
+    resolved_z = default_z if z is None else z
+    return f"X {x:.3f}\nY {y:.3f}\nZ {resolved_z:.3f}"
+
+
+def compact_path_text(text: str, *, keep: int = 18) -> str:
+    """Return a short path label that preserves both ends of long paths."""
+
+    normalized = text.strip()
+    if len(normalized) <= keep * 2 + 3:
+        return normalized
+    return f"{normalized[:keep]}...{normalized[-keep:]}"
+
+
+def format_count_label(count: int, noun: str) -> str:
+    """Return a compact count label with basic pluralization."""
+
+    suffix = "" if count == 1 else "s"
+    return f"{count} {noun}{suffix}"
+
+
+class ElidedLineEdit(QLineEdit):
+    """Line edit that keeps the full value while showing an elided path when idle."""
+
+    def __init__(self, text: str = "", parent: QWidget | None = None):
+        super().__init__(parent)
+        self._full_text = ""
+        self.textEdited.connect(self._handle_text_edited)
+        self.setText(text)
+
+    def text(self) -> str:  # type: ignore[override]
+        return self._full_text
+
+    def setText(self, text: str) -> None:  # type: ignore[override]
+        self._full_text = str(text or "")
+        self.setToolTip(self._full_text)
+        self._sync_display()
+
+    def focusInEvent(self, event) -> None:  # pragma: no cover - Qt focus path
+        self._show_full_text()
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # pragma: no cover - Qt focus path
+        self._full_text = super().text()
+        self.setToolTip(self._full_text)
+        super().focusOutEvent(event)
+        self._sync_display()
+
+    def resizeEvent(self, event) -> None:  # pragma: no cover - Qt paint path
+        super().resizeEvent(event)
+        if not self.hasFocus():
+            self._sync_display()
+
+    def _handle_text_edited(self, text: str) -> None:
+        self._full_text = text
+        self.setToolTip(self._full_text)
+
+    def _show_full_text(self) -> None:
+        with QSignalBlocker(self):
+            super().setText(self._full_text)
+        super().setCursorPosition(len(self._full_text))
+
+    def _sync_display(self) -> None:
+        if self.hasFocus():
+            display_text = self._full_text
+        else:
+            display_text = self.fontMetrics().elidedText(
+                self._full_text,
+                Qt.TextElideMode.ElideMiddle,
+                max(self.contentsRect().width() - 6, 0),
+            )
+        with QSignalBlocker(self):
+            super().setText(display_text)
 
 
 def build_template_health_text(template: WireRecipeTemplate) -> str:
@@ -194,12 +282,13 @@ class WireExportDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("Wire Production Export")
-        self.resize(1080, 820)
+        self.resize(1220, 820)
 
         self.document = document
         self.template_store = template_store
         self.output_directory = Path(output_directory)
         self._production_exporter = WireProductionExporter()
+        self._mono_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         starter_template = build_rx2000_default_template()
         self._rx2000_default_pfile_named = dict(starter_template.pfile_named_defaults)
         self._rx2000_default_pfile_field_map = dict(starter_template.pfile_field_map)
@@ -227,13 +316,7 @@ class WireExportDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        summary = QLabel(
-            "Choose a saved machine template or create a new one. "
-            "WB1 export uses the sample template path plus the field mapping JSON, "
-            "while XLSM export copies the macro workbook, adds a safe coordinate sheet, "
-            "backfills the WB input sheet when a WB1 template is also configured, "
-            "and applies any saved PFILE named defaults plus cell overrides."
-        )
+        summary = QLabel("Choose a template, confirm output, then export wire production files.")
         summary.setWordWrap(True)
         layout.addWidget(summary)
 
@@ -259,6 +342,7 @@ class WireExportDialog(QDialog):
         top_row.addWidget(self.save_as_template_button)
 
         layout.addLayout(top_row)
+        layout.addWidget(self._build_overview_cards())
 
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
@@ -268,7 +352,7 @@ class WireExportDialog(QDialog):
         left_column = QVBoxLayout()
         left_column.setContentsMargins(0, 0, 0, 0)
         left_column.setSpacing(12)
-        body.addLayout(left_column, stretch=3)
+        body.addLayout(left_column, stretch=2)
 
         left_column.addWidget(self._build_general_group())
         left_column.addWidget(self._build_common_pfile_group())
@@ -277,12 +361,12 @@ class WireExportDialog(QDialog):
         right_column = QVBoxLayout()
         right_column.setContentsMargins(0, 0, 0, 0)
         right_column.setSpacing(12)
-        body.addLayout(right_column, stretch=2)
+        body.addLayout(right_column, stretch=3)
 
         right_column.addWidget(self._build_output_group())
         right_column.addWidget(self._build_preview_group(), stretch=1)
 
-        self.status_label = QLabel("Ready.")
+        self.status_label = QLabel("Ready to export once the template and output look right.")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
@@ -314,6 +398,45 @@ class WireExportDialog(QDialog):
 
         layout.addLayout(action_row)
 
+    def _build_overview_cards(self) -> QWidget:
+        row = QWidget(self)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        self.template_card_value, self.template_card_detail = self._add_status_card(layout, "Template")
+        self.wire_card_value, self.wire_card_detail = self._add_status_card(layout, "Wire Data")
+        self.output_card_value, self.output_card_detail = self._add_status_card(layout, "Output")
+        return row
+
+    def _add_status_card(self, parent_layout: QHBoxLayout, title: str) -> tuple[QLabel, QLabel]:
+        card = QFrame(self)
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card.setStyleSheet(
+            "QFrame { border: 1px solid #2C2C2C; border-radius: 10px; background: #191919; }"
+            "QLabel { border: none; background: transparent; }"
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(4)
+
+        title_label = QLabel(title, card)
+        title_label.setStyleSheet("color: #9A9A9A; font-size: 11px;")
+        layout.addWidget(title_label)
+
+        value_label = QLabel("—", card)
+        value_label.setWordWrap(True)
+        value_label.setStyleSheet("font-size: 16px; font-weight: 600;")
+        layout.addWidget(value_label)
+
+        detail_label = QLabel("", card)
+        detail_label.setWordWrap(True)
+        detail_label.setStyleSheet("color: #9A9A9A; font-size: 12px;")
+        layout.addWidget(detail_label)
+
+        parent_layout.addWidget(card, stretch=1)
+        return value_label, detail_label
+
     def _build_general_group(self) -> QWidget:
         group = QGroupBox("Template Settings")
         form = QFormLayout(group)
@@ -328,11 +451,11 @@ class WireExportDialog(QDialog):
         self.machine_type_edit.textChanged.connect(self._refresh_preview)
         form.addRow("Machine Type", self.machine_type_edit)
 
-        self.wb1_template_path_edit = QLineEdit()
+        self.wb1_template_path_edit = ElidedLineEdit()
         self.wb1_template_path_edit.textChanged.connect(self._refresh_preview)
         form.addRow("WB1 Template", self._with_browse_button(self.wb1_template_path_edit, self._browse_wb1_template))
 
-        self.xlsm_template_path_edit = QLineEdit()
+        self.xlsm_template_path_edit = ElidedLineEdit()
         self.xlsm_template_path_edit.textChanged.connect(self._refresh_preview)
         form.addRow(
             "XLSM Template",
@@ -415,51 +538,72 @@ class WireExportDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
+        toggle_row = QHBoxLayout()
+        toggle_row.setContentsMargins(0, 0, 0, 0)
+        toggle_row.setSpacing(8)
+        self.advanced_json_toggle = QToolButton(group)
+        self.advanced_json_toggle.setCheckable(True)
+        self.advanced_json_toggle.toggled.connect(self._toggle_advanced_json)
+        toggle_row.addWidget(self.advanced_json_toggle)
+
+        json_summary = QLabel("Template mapping and machine JSON. Hidden by default.")
+        json_summary.setWordWrap(True)
+        json_summary.setStyleSheet("color: #8E8E8E; font-size: 12px;")
+        toggle_row.addWidget(json_summary, stretch=1)
+        layout.addLayout(toggle_row)
+
+        self.advanced_json_container = QWidget(group)
+        editor_layout = QVBoxLayout(self.advanced_json_container)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(8)
+        layout.addWidget(self.advanced_json_container)
+
         self.record_defaults_edit = self._build_json_editor(
-            layout,
+            editor_layout,
             "Record Defaults",
             "Named non-coordinate defaults that match WB1 field names when available.",
         )
         self.pfile_named_defaults_edit = self._build_json_editor(
-            layout,
+            editor_layout,
             "PFILE Named Defaults",
             "Named RX2000 parameters that compile into PFILE cells before raw cell overrides are applied.",
         )
         self.pfile_field_map_edit = self._build_json_editor(
-            layout,
+            editor_layout,
             "PFILE Field Map",
             "Maps named PFILE parameters to cells, for example {\"search_force\": \"A8\"}.",
         )
         self.pfile_cell_overrides_edit = self._build_json_editor(
-            layout,
+            editor_layout,
             "PFILE Cell Overrides",
             "Raw XLSM PFILE sheet overrides keyed by cell, for example {\"A4\": 25}. These win over named defaults.",
         )
         self.role_record_defaults_edit = self._build_json_editor(
-            layout,
+            editor_layout,
             "Role Record Defaults",
             "Per-role named overrides, for example {\"first\": {...}, \"second\": {...}}.",
         )
         self.header_defaults_edit = self._build_json_editor(
-            layout,
+            editor_layout,
             "Header Defaults",
             "WB1 header word overrides using PRE:line:word or G/H/I:line:word, for example {\"PRE:1:2\": 45, \"H:0:5\": 1}.",
         )
         self.wb1_field_map_edit = self._build_json_editor(
-            layout,
+            editor_layout,
             "WB1 Field Map",
             "Machine-specific word positions, for example role_code / bond_x / bond_y / bond_z / wire_seq.",
         )
         self.wb1_record_defaults_edit = self._build_json_editor(
-            layout,
+            editor_layout,
             "WB1 Record Defaults",
             "Raw word-index overrides applied before coordinates are written.",
         )
         self.wb1_role_codes_edit = self._build_json_editor(
-            layout,
+            editor_layout,
             "WB1 Role Codes",
             "Usually {\"first\": 0, \"second\": 2}.",
         )
+        self._toggle_advanced_json(False)
         return group
 
     def _build_common_pfile_group(self) -> QWidget:
@@ -503,7 +647,7 @@ class WireExportDialog(QDialog):
         help_label.setStyleSheet("color: #8E8E8E; font-size: 12px;")
         parent_layout.addWidget(help_label)
         editor = QPlainTextEdit()
-        editor.setMinimumHeight(92)
+        editor.setMinimumHeight(84)
         editor.textChanged.connect(self._refresh_preview)
         parent_layout.addWidget(editor)
         return editor
@@ -514,10 +658,11 @@ class WireExportDialog(QDialog):
         form.setContentsMargins(12, 12, 12, 12)
         form.setSpacing(8)
 
-        self.output_directory_edit = QLineEdit(str(self.output_directory))
+        self.output_directory_edit = ElidedLineEdit(str(self.output_directory))
         form.addRow("Output Directory", self._with_browse_button(self.output_directory_edit, self._browse_output_directory))
 
         self.base_name_edit = QLineEdit(self.document.path.stem)
+        self.base_name_edit.textChanged.connect(self._refresh_preview)
         form.addRow("Base Name", self.base_name_edit)
         return group
 
@@ -532,20 +677,30 @@ class WireExportDialog(QDialog):
 
         self.preview_table = QTableWidget(0, 7, self)
         self.preview_table.setHorizontalHeaderLabels(
-            ["Wire Seq", "Wire ID", "Group", "First (X,Y,Z)", "Second (X,Y,Z)", "Length", "Angle"]
+            ["Seq", "Wire", "Group", "First Bond", "Second Bond", "Len (mm)", "Angle (deg)"]
         )
         self.preview_table.verticalHeader().setVisible(False)
         self.preview_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.preview_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.preview_table.setAlternatingRowColors(True)
+        self.preview_table.setWordWrap(True)
         self.preview_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.preview_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.preview_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.preview_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.preview_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.preview_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.preview_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.preview_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         self.preview_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        self.preview_table.setColumnWidth(3, 120)
+        self.preview_table.setColumnWidth(4, 120)
         layout.addWidget(self.preview_table, stretch=1)
         return group
+
+    def _toggle_advanced_json(self, expanded: bool) -> None:
+        if hasattr(self, "advanced_json_container"):
+            self.advanced_json_container.setVisible(expanded)
+        if hasattr(self, "advanced_json_toggle"):
+            self.advanced_json_toggle.setText("Hide Advanced JSON" if expanded else "Show Advanced JSON")
 
     def _with_browse_button(self, line_edit: QLineEdit, handler) -> QWidget:
         row = QWidget()
@@ -567,6 +722,7 @@ class WireExportDialog(QDialog):
         )
         if path:
             self.wb1_template_path_edit.setText(path)
+            self._refresh_preview()
 
     def _browse_xlsm_template(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -577,6 +733,7 @@ class WireExportDialog(QDialog):
         )
         if path:
             self.xlsm_template_path_edit.setText(path)
+            self._refresh_preview()
 
     def _browse_output_directory(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -586,6 +743,84 @@ class WireExportDialog(QDialog):
         )
         if path:
             self.output_directory_edit.setText(path)
+            self._refresh_preview()
+
+    def _template_card_detail(self, template: WireRecipeTemplate) -> str:
+        machine = template.machine_type.strip() or "Unknown machine"
+        wb1_status = "WB1 ready"
+        if not template.wb1_template_path:
+            wb1_status = "WB1 template missing"
+        elif missing_required_wb1_j_fields(template):
+            wb1_status = "WB1 mapping incomplete"
+
+        xlsm_status = "XLSM ready" if template.xlsm_template_path else "XLSM template missing"
+        return f"{machine} · {wb1_status} · {xlsm_status}"
+
+    def _wire_card_detail(self, group_count: int) -> str:
+        skipped_count = len(self._wire_extraction_audit.skipped_entities)
+        merge_count = len(self._wire_extraction_audit.merge_candidates)
+        details = [format_count_label(group_count, "group")]
+        if skipped_count:
+            details.append(f"{skipped_count} skipped")
+        if merge_count:
+            details.append(f"{merge_count} split joins")
+        if len(details) == 1:
+            details.append("order preview ready")
+        return " · ".join(details)
+
+    def _output_card_detail(self) -> str:
+        return compact_path_text(self.output_directory_edit.text().strip() or str(self.output_directory))
+
+    def _status_overview_text(self, template: WireRecipeTemplate) -> str:
+        template_issues: list[str] = []
+        if not template.wb1_template_path:
+            template_issues.append("WB1 template file is missing.")
+        elif missing_required_wb1_j_fields(template):
+            template_issues.append("WB1 field mapping still needs required J fields.")
+        else:
+            template_issues.append("WB1 export is ready.")
+
+        if not template.xlsm_template_path:
+            template_issues.append("XLSM export still needs a template file.")
+        else:
+            template_issues.append("XLSM template is configured.")
+
+        skipped_count = len(self._wire_extraction_audit.skipped_entities)
+        merge_count = len(self._wire_extraction_audit.merge_candidates)
+        if skipped_count:
+            template_issues.append(f"{skipped_count} wire-layer entity(s) were skipped during extraction.")
+        if merge_count:
+            template_issues.append(f"{merge_count} wire join suggestion(s) are available in the audit report.")
+        return " ".join(template_issues)
+
+    def _refresh_overview_cards(self, template: WireRecipeTemplate, ordered_records: list[Any]) -> None:
+        group_count = len({record.group_no for record in ordered_records}) if ordered_records else 0
+
+        self.template_card_value.setText(template.name or "New Template")
+        self.template_card_detail.setText(self._template_card_detail(template))
+
+        if ordered_records:
+            self.wire_card_value.setText(
+                f"{format_count_label(len(ordered_records), 'wire')} / {format_count_label(group_count, 'group')}"
+            )
+        else:
+            self.wire_card_value.setText("No wire data")
+        self.wire_card_detail.setText(self._wire_card_detail(group_count))
+
+        base_name = self.base_name_edit.text().strip() or "Set file name"
+        self.output_card_value.setText(base_name)
+        self.output_card_detail.setText(self._output_card_detail())
+
+    def _set_preview_cell(self, row_index: int, column: int, text: str, *, tooltip: str | None = None, align_right: bool = False, monospace: bool = False) -> None:
+        item = QTableWidgetItem(text)
+        if tooltip:
+            item.setToolTip(tooltip)
+        alignment = Qt.AlignmentFlag.AlignVCenter
+        alignment |= Qt.AlignmentFlag.AlignRight if align_right else Qt.AlignmentFlag.AlignLeft
+        item.setTextAlignment(alignment)
+        if monospace:
+            item.setFont(self._mono_font)
+        self.preview_table.setItem(row_index, column, item)
 
     def _reload_templates(self) -> None:
         templates = self.template_store.list_templates()
@@ -855,6 +1090,12 @@ class WireExportDialog(QDialog):
         if template is None:
             self.preview_table.setRowCount(0)
             self.preview_summary_label.setText("Preview unavailable until the JSON fields are valid.")
+            self.template_card_value.setText("Template needs review")
+            self.template_card_detail.setText("Fix the JSON fields before exporting.")
+            self.wire_card_value.setText("Preview unavailable")
+            self.wire_card_detail.setText("")
+            self.output_card_value.setText(self.base_name_edit.text().strip() or "Set file name")
+            self.output_card_detail.setText(self._output_card_detail())
             self.status_label.setText("Preview unavailable until the JSON fields are valid.")
             return
 
@@ -865,34 +1106,38 @@ class WireExportDialog(QDialog):
         for row_index, record in enumerate(preview_records):
             first = record.geometry.first_point
             second = record.geometry.second_point
-            values = [
-                str(record.wire_seq),
-                record.wire_id,
-                str(record.group_no),
-                format_preview_point(first.x, first.y, first.z, template.default_z),
-                format_preview_point(second.x, second.y, second.z, template.default_z),
-                f"{record.geometry.length:.3f}",
-                f"{record.geometry.angle_deg:.2f}",
-            ]
-            for column, value in enumerate(values):
-                self.preview_table.setItem(row_index, column, QTableWidgetItem(value))
+            self._set_preview_cell(row_index, 0, str(record.wire_seq), align_right=True)
+            self._set_preview_cell(row_index, 1, record.wire_id)
+            self._set_preview_cell(row_index, 2, str(record.group_no), align_right=True)
+            self._set_preview_cell(
+                row_index,
+                3,
+                format_preview_xy_lines(first.x, first.y),
+                tooltip=format_preview_point_tooltip(first.x, first.y, first.z, template.default_z),
+                monospace=True,
+            )
+            self._set_preview_cell(
+                row_index,
+                4,
+                format_preview_xy_lines(second.x, second.y),
+                tooltip=format_preview_point_tooltip(second.x, second.y, second.z, template.default_z),
+                monospace=True,
+            )
+            self._set_preview_cell(row_index, 5, f"{record.geometry.length:.3f}", align_right=True, monospace=True)
+            self._set_preview_cell(row_index, 6, f"{record.geometry.angle_deg:.2f}", align_right=True, monospace=True)
+
+        self.preview_table.resizeRowsToContents()
 
         if ordered_records:
             group_count = len({record.group_no for record in ordered_records})
             self.preview_summary_label.setText(
-                f"{len(ordered_records)} wires detected across {group_count} group(s). "
-                f"Showing the first {len(preview_records)} ordered rows."
+                f"{format_count_label(len(ordered_records), 'wire')} across {format_count_label(group_count, 'group')}. "
+                f"Showing the first {len(preview_records)} rows."
             )
         else:
             self.preview_summary_label.setText("No wire geometries are available in the current document.")
-        self.status_label.setText(
-            "\n".join(
-                [
-                    build_wire_extraction_health_text(self._wire_extraction_audit),
-                    build_template_health_text(template),
-                ]
-            )
-        )
+        self._refresh_overview_cards(template, ordered_records)
+        self.status_label.setText(self._status_overview_text(template))
 
     def _accept_export(self, *, export_wb1: bool, export_xlsm: bool) -> None:
         if not self.document.wire_geometries:

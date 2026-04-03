@@ -1,14 +1,50 @@
 from __future__ import annotations
 
+from collections import Counter
+from pathlib import Path
+
+from PySide6.QtWidgets import QApplication
+
 from core.export import extract_wire_geometries_with_audit
-from core.export.wire_models import WireOrderingConfig
+from core.export.wire_models import WireGeometry, WireOrderingConfig, WirePoint
 from core.export.wire_recipe_models import WireRecipeTemplate
+from services import ProjectDocument, WireRecipeTemplateStore
 from ui.wire_export_dialog import (
     build_template_health_text,
     build_wire_extraction_health_text,
+    compact_path_text,
+    format_count_label,
     format_preview_point,
+    format_preview_point_tooltip,
+    format_preview_xy_lines,
     merge_rx2000_common_pfile_fields,
+    WireExportDialog,
 )
+
+
+def _app() -> QApplication:
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
+
+
+def _wire_geometry(wire_id: str, first_xy: tuple[float, float], second_xy: tuple[float, float], *, group_hint: str) -> WireGeometry:
+    first_point = WirePoint(point_id=f"{wire_id}-P1", wire_id=wire_id, role="first", x=first_xy[0], y=first_xy[1])
+    second_point = WirePoint(point_id=f"{wire_id}-P2", wire_id=wire_id, role="second", x=second_xy[0], y=second_xy[1])
+    return WireGeometry(
+        wire_id=wire_id,
+        layer_name="06_wire",
+        source_type="LINE",
+        source_entity_indices=(0,),
+        route_points=(first_xy, second_xy),
+        first_point=first_point,
+        second_point=second_point,
+        length=3.5,
+        angle_deg=45.0,
+        bbox=(min(first_xy[0], second_xy[0]), min(first_xy[1], second_xy[1]), max(first_xy[0], second_xy[0]), max(first_xy[1], second_xy[1])),
+        cluster_id=group_hint,
+    )
 
 
 def test_merge_rx2000_common_pfile_fields_overlays_form_values_and_seeds_field_map():
@@ -35,6 +71,15 @@ def test_merge_rx2000_common_pfile_fields_overlays_form_values_and_seeds_field_m
 def test_format_preview_point_uses_default_z_only_when_point_z_is_missing():
     assert format_preview_point(1.0, 2.0, None, 7.5) == "1.000, 2.000, 7.500"
     assert format_preview_point(1.0, 2.0, 0.0, 7.5) == "1.000, 2.000, 0.000"
+
+
+def test_preview_coordinate_helpers_use_compact_cell_text_and_full_tooltip():
+    assert format_preview_xy_lines(1.0, 2.0) == "X 1.000\nY 2.000"
+    assert format_preview_point_tooltip(1.0, 2.0, None, 7.5) == "X 1.000\nY 2.000\nZ 7.500"
+    assert format_count_label(1, "group") == "1 group"
+    assert format_count_label(2, "wire") == "2 wires"
+    assert compact_path_text("C:/short/path") == "C:/short/path"
+    assert compact_path_text("C:/Users/demo/Desktop/Auto-Bonding/output/templates") == "C:/Users/demo/Desk...g/output/templates"
 
 
 def test_build_template_health_text_summarizes_current_wb1_export_mode():
@@ -105,3 +150,36 @@ def test_build_wire_extraction_health_text_marks_same_role_direction_conflicts()
     assert "Direction conflicts at shared endpoints: 1 pair(s)." in text
     assert "Join examples: W0001(second) <-> W0002(second) @ (1.000, 0.000) [same_role_conflict]." in text
     assert "Merge suggestions: W0001->W0002 reverse_second_then_join reverse=W0002." in text
+
+
+def test_wire_export_dialog_defaults_to_compact_overview(tmp_path):
+    _app()
+    document = ProjectDocument(
+        path=Path("preview.dxf"),
+        size_bytes=0,
+        raw_entities=[],
+        scene_rect=(0.0, 0.0, 10.0, 10.0),
+        raw_counts=Counter(),
+        layer_info=[{"name": "06_wire", "mapped_type": "wire", "suggested_role": "wire"}],
+        wire_geometries=[
+            _wire_geometry("W0001", (1.0, 2.0), (3.0, 4.0), group_hint="A"),
+            _wire_geometry("W0002", (5.0, 6.0), (7.0, 8.0), group_hint="B"),
+        ],
+    )
+    store = WireRecipeTemplateStore(tmp_path / "wire_templates.json")
+
+    dialog = WireExportDialog(document, store, tmp_path)
+
+    assert dialog.advanced_json_toggle.isChecked() is False
+    assert dialog.advanced_json_container.isHidden() is True
+    assert dialog.preview_table.horizontalHeaderItem(3).text() == "First Bond"
+    assert dialog.preview_table.horizontalHeaderItem(4).text() == "Second Bond"
+    assert dialog.preview_summary_label.text().startswith("2 wires across ")
+    assert dialog.preview_summary_label.text().endswith("Showing the first 2 rows.")
+    assert dialog.wire_card_value.text().startswith("2 wires / ")
+    first_cell = dialog.preview_table.item(0, 3)
+    assert first_cell is not None
+    assert first_cell.text() == "X 1.000\nY 2.000"
+    assert first_cell.toolTip() == "X 1.000\nY 2.000\nZ 1455.200"
+
+    dialog.close()
