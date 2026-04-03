@@ -18,6 +18,29 @@ SEMANTIC_ROLE_LABELS: dict[str, str] = {
     "bond_point": "Bond Point",
 }
 
+SEMANTIC_ROLE_UI_LABELS: dict[str, str] = {
+    "substrate": "基板",
+    "hole": "孔",
+    "round_feature": "圆特征",
+    "module_region": "模块区",
+    "lead_frame": "引线框",
+    "pad": "焊盘",
+    "die_region": "芯片区",
+    "wire": "金线",
+    "die_pad": "焊盘",
+    "bond_point": "焊点",
+}
+
+INTERNAL_TYPE_ROLE_MAP: dict[str, str] = {
+    "substrate": "substrate",
+    "hole": "hole",
+    "round_feature": "round_feature",
+    "lead_frame": "lead_frame",
+    "wire": "wire",
+    "bond_point": "bond_point",
+    "die_pad": "pad",
+}
+
 RECOMMENDED_LAYER_ROLE_MAP: dict[str, str] = {
     "01_SUBSTRATE": "substrate",
     "02_MODULE_REGION": "module_region",
@@ -120,6 +143,22 @@ def format_layer_role(role_name: str | None) -> str:
     return SEMANTIC_ROLE_LABELS.get(role_name, role_name.replace("_", " ").title())
 
 
+def format_layer_role_ui(role_name: str | None) -> str:
+    """Return a short UI-facing label for one semantic role."""
+
+    if not role_name:
+        return "未识别"
+    return SEMANTIC_ROLE_UI_LABELS.get(role_name, format_layer_role(role_name))
+
+
+def mapped_type_to_semantic_role(mapped_type: str | None) -> str | None:
+    """Translate one internal import-mapping type into a semantic role."""
+
+    if not mapped_type:
+        return None
+    return INTERNAL_TYPE_ROLE_MAP.get(str(mapped_type).strip().lower())
+
+
 def apply_layer_role_overrides(
     layer_info: list[dict[str, object]],
     overrides: dict[str, str],
@@ -138,10 +177,13 @@ def apply_layer_role_overrides(
 
 __all__ = [
     "apply_layer_role_overrides",
+    "mapped_type_to_semantic_role",
     "RECOMMENDED_IMPORT_MAPPING",
     "RECOMMENDED_LAYER_ROLE_MAP",
     "SEMANTIC_ROLE_LABELS",
+    "SEMANTIC_ROLE_UI_LABELS",
     "format_layer_role",
+    "format_layer_role_ui",
     "normalize_layer_name",
     "suggest_layer_semantic_role",
 ]

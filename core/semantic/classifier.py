@@ -7,12 +7,13 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from ..hole_rules import classify_substrate_round_feature
-from ..layer_semantics import suggest_layer_semantic_role
+from ..layer_semantics import mapped_type_to_semantic_role, suggest_layer_semantic_role
 from ..raw_dxf_types import LayerInfo, Point2D, RawEntity
 from .candidates import SemanticCandidate
 from .confidence import bump_confidence
 from .entities import SemanticEntity
 from .fallback import finalize_candidates
+from .layer_summary import LayerSemanticSummary, summarize_layers
 from .relations import RelationNote, apply_cross_layer_relations
 
 
@@ -39,6 +40,10 @@ class SemanticClassificationResult:
             counts[candidate.kind] = counts.get(candidate.kind, 0) + 1
         return counts
 
+    @property
+    def layer_summaries(self) -> list[LayerSemanticSummary]:
+        return summarize_layers(self.entities, self.review)
+
 
 def classify_semantic_layers(
     raw_entities: list[RawEntity],
@@ -63,7 +68,14 @@ def classify_semantic_layers(
 
 
 def _resolve_layer_roles(raw_entities: list[RawEntity], layer_info: list[LayerInfo]) -> dict[str, str | None]:
-    roles = {str(layer["name"]): layer.get("suggested_role") for layer in layer_info}
+    roles: dict[str, str | None] = {}
+    for layer in layer_info:
+        layer_name = str(layer["name"])
+        roles[layer_name] = (
+            layer.get("suggested_role")
+            or mapped_type_to_semantic_role(layer.get("mapped_type"))
+            or suggest_layer_semantic_role(layer_name)
+        )
     for entity in raw_entities:
         layer_name = str(entity.get("layer", "0"))
         roles.setdefault(layer_name, suggest_layer_semantic_role(layer_name))
@@ -107,11 +119,21 @@ def _classify_substrate(raw_entities: list[RawEntity], layer_roles: dict[str, st
     for hole_order, (hole_index, hole_entity) in enumerate(holes, start=1):
         hole_bbox = _entity_bbox(hole_entity)
         hole_center = _entity_center(hole_entity)
+        repeated_count = repeated_counts.get(hole_index, 1)
+        concentric_count = concentric_counts.get(hole_index, 1)
         hole_kind, edge_contacts = classify_substrate_round_feature(
             hole_bbox,
             substrate_bbox,
-            repeated_count=repeated_counts.get(hole_index, 1),
-            concentric_count=concentric_counts.get(hole_index, 1),
+            repeated_count=repeated_count,
+            concentric_count=concentric_count,
+        )
+        rule_source = _substrate_round_rule_source(
+            hole_kind,
+            edge_contacts=edge_contacts,
+            repeated_count=repeated_count,
+            concentric_count=concentric_count,
+            feature_bbox=hole_bbox,
+            substrate_bbox=substrate_bbox,
         )
         if hole_kind in {"mounting", "tooling"}:
             hole_confidence = bump_confidence(0.86, 0.06, 0.02 if edge_contacts else 0.0)
@@ -127,6 +149,7 @@ def _classify_substrate(raw_entities: list[RawEntity], layer_roles: dict[str, st
                         "parent": f"substrate_candidate_{substrate_index}",
                         "hole_kind": hole_kind,
                         "edge_contacts": edge_contacts,
+                        "rule_source": rule_source,
                     },
                 )
             )
@@ -144,6 +167,7 @@ def _classify_substrate(raw_entities: list[RawEntity], layer_roles: dict[str, st
                     "parent": f"substrate_candidate_{substrate_index}",
                     "feature_kind": "substrate_round",
                     "edge_contacts": edge_contacts,
+                    "rule_source": rule_source,
                 },
             )
         )
@@ -179,17 +203,47 @@ def _classify_holes(raw_entities: list[RawEntity], layer_roles: dict[str, str | 
 
     candidates: list[SemanticCandidate] = []
     for index, entity in _closed_entities_for_role(raw_entities, layer_roles, "hole"):
-        if not _is_circle_entity(entity):
+        diameter = _round_entity_diameter(entity)
+        if diameter is not None:
+            candidates.append(
+                SemanticCandidate(
+                    id=f"hole_candidate_layer_{index}",
+                    kind="hole_candidate",
+                    layer_name=str(entity.get("layer", "0")),
+                    confidence=0.88,
+                    source_indices=(index,),
+                    geometry={"center": _entity_center(entity), "bbox": _entity_bbox(entity)},
+                    properties={
+                        "hole_kind": "layer_defined",
+                        "edge_contacts": tuple(),
+                        "hole_shape": "round",
+                        "rule_source": "explicit_hole_layer_round",
+                    },
+                )
+            )
+            continue
+        slot_profile = _slot_profile(entity)
+        if slot_profile is None:
             continue
         candidates.append(
             SemanticCandidate(
                 id=f"hole_candidate_layer_{index}",
                 kind="hole_candidate",
                 layer_name=str(entity.get("layer", "0")),
-                confidence=0.88,
+                confidence=0.78,
                 source_indices=(index,),
-                geometry={"center": _entity_center(entity), "bbox": _entity_bbox(entity)},
-                properties={"hole_kind": "layer_defined", "edge_contacts": tuple()},
+                geometry={
+                    "center": _entity_center(entity),
+                    "bbox": _entity_bbox(entity),
+                    "slot_size": slot_profile["size"],
+                },
+                properties={
+                    "hole_kind": "layer_defined",
+                    "edge_contacts": tuple(),
+                    "hole_shape": "slot",
+                    "slot_aspect_ratio": slot_profile["aspect_ratio"],
+                    "rule_source": "explicit_hole_layer_slot",
+                },
             )
         )
     return candidates
@@ -474,6 +528,55 @@ def _round_entity_diameter(entity: RawEntity) -> float | None:
             return None
         return (width + height) / 2.0
     return None
+
+
+def _slot_profile(entity: RawEntity) -> dict[str, object] | None:
+    if entity["type"] != "LWPOLYLINE" or not entity.get("closed"):
+        return None
+    bbox = _entity_bbox(entity)
+    width, height = _bbox_size(bbox)
+    if min(width, height) <= 0:
+        return None
+    aspect_ratio = _bbox_aspect_ratio(bbox)
+    if aspect_ratio < 1.8 or aspect_ratio > 8.0:
+        return None
+    area = _entity_area(entity)
+    bbox_area = max(width * height, 1e-6)
+    fill_ratio = area / bbox_area
+    if fill_ratio < 0.45 or fill_ratio > 0.95:
+        return None
+    return {
+        "aspect_ratio": round(aspect_ratio, 3),
+        "size": (round(width, 4), round(height, 4)),
+        "fill_ratio": round(fill_ratio, 3),
+    }
+
+
+def _substrate_round_rule_source(
+    hole_kind: str,
+    *,
+    edge_contacts: tuple[str, ...],
+    repeated_count: int,
+    concentric_count: int,
+    feature_bbox: tuple[float, float, float, float],
+    substrate_bbox: tuple[float, float, float, float],
+) -> str:
+    if concentric_count >= 2:
+        return "substrate_concentric_round"
+    if len(edge_contacts) >= 2:
+        return "substrate_corner_mounting_hole"
+    if len(edge_contacts) == 1:
+        return "substrate_edge_tooling_hole"
+
+    feature_diameter = max(feature_bbox[2] - feature_bbox[0], feature_bbox[3] - feature_bbox[1], 0.0)
+    substrate_span = max(substrate_bbox[2] - substrate_bbox[0], substrate_bbox[3] - substrate_bbox[1], 1.0)
+    relative_diameter = feature_diameter / substrate_span
+
+    if repeated_count >= 2 and relative_diameter <= 0.20:
+        return "substrate_repeated_round_hole"
+    if hole_kind == "tooling" and relative_diameter <= 0.06:
+        return "substrate_small_round_hole"
+    return "substrate_round_feature"
 
 
 def _bbox_size(bbox: tuple[float, float, float, float]) -> tuple[float, float]:
