@@ -10,7 +10,7 @@ from core.semantic import (
     classify_semantic_layers,
     manual_override_entity_key,
 )
-from core.layer_semantics import apply_layer_role_overrides
+from core.layer_semantics import apply_layer_role_overrides, format_layer_role_ui
 
 
 def test_apply_manual_semantic_overrides_promotes_review_candidate():
@@ -60,6 +60,32 @@ def test_apply_manual_semantic_overrides_supports_hole_kind():
     assert len(updated.review) == 0
     assert len(updated.entities) == 1
     assert updated.entities[0].kind == "hole"
+
+
+def test_apply_manual_semantic_overrides_supports_round_feature_kind():
+    result = SemanticClassificationResult(
+        candidates=[],
+        entities=[],
+        review=[
+            SemanticCandidate(
+                id="round_feature_candidate_9",
+                kind="round_feature_candidate",
+                layer_name="01_substrate",
+                confidence=0.74,
+                source_indices=(9,),
+                properties={"rule_source": "substrate_concentric_round"},
+            )
+        ],
+        relation_notes=[],
+    )
+
+    updated = apply_manual_semantic_overrides(result, {"round_feature_candidate_9": "round_feature"})
+
+    assert len(updated.review) == 0
+    assert len(updated.entities) == 1
+    assert updated.entities[0].kind == "round_feature"
+    assert updated.entities[0].properties["manual_source_id"] == "round_feature_candidate_9"
+    assert updated.entities[0].properties["rule_source"] == "substrate_concentric_round"
 
 
 def test_apply_layer_role_overrides_replaces_suggested_role():
@@ -116,3 +142,31 @@ def test_layer_role_override_changes_semantic_classification():
     assert len(base_result.entities) == 0
     assert len(base_result.review) == 0
     assert {candidate.kind for candidate in overridden_result.review} == {"wire_candidate"}
+
+
+def test_manual_override_updates_layer_summary_for_round_feature():
+    result = SemanticClassificationResult(
+        candidates=[],
+        entities=[],
+        review=[
+            SemanticCandidate(
+                id="round_feature_candidate_9",
+                kind="round_feature_candidate",
+                layer_name="01_substrate",
+                confidence=0.74,
+                source_indices=(9,),
+                properties={"rule_source": "substrate_concentric_round"},
+            )
+        ],
+        relation_notes=[],
+    )
+
+    updated = apply_manual_semantic_overrides(result, {"round_feature_candidate_9": "round_feature"})
+    summaries = {summary.layer_name: summary for summary in updated.layer_summaries}
+
+    assert summaries["01_substrate"].recognized_role == "round_feature"
+    assert summaries["01_substrate"].recognized_label == "Round Feature"
+    assert summaries["01_substrate"].display_label == format_layer_role_ui("round_feature")
+    assert summaries["01_substrate"].state == "resolved"
+    assert summaries["01_substrate"].badge_tone == "positive"
+    assert summaries["01_substrate"].is_action_needed is False

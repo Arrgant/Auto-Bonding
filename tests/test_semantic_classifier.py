@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.layer_semantics import format_layer_role_ui
 from core.semantic import classify_semantic_layers
 
 
@@ -193,6 +194,124 @@ def test_classify_semantic_layers_tracks_pad_cluster_details_and_wire_snaps():
     assert wire_entities[0].properties["end_anchor_alignment"] >= 0.99
     assert wire_entities[0].geometry["snapped_start_point"] == (0.0, 0.5)
     assert wire_entities[0].geometry["snapped_end_point"] == (7.0, 0.5)
+
+
+def test_classify_semantic_layers_exposes_resolved_layer_summaries():
+    raw_entities = [
+        {
+            "type": "LWPOLYLINE",
+            "points": [(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)],
+            "closed": True,
+            "layer": "04_pad",
+        },
+        {"type": "LINE", "start": (0.0, 0.5), "end": (5.0, 0.5), "layer": "06_wire"},
+    ]
+    layer_info = [
+        {
+            "name": "04_pad",
+            "color": 1,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": "die_pad",
+            "suggested_role": "pad",
+            "entity_count": 1,
+            "entity_types": {"LWPOLYLINE": 1},
+        },
+        {
+            "name": "06_wire",
+            "color": 3,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": "wire",
+            "suggested_role": "wire",
+            "entity_count": 1,
+            "entity_types": {"LINE": 1},
+        },
+    ]
+
+    result = classify_semantic_layers(raw_entities, layer_info)
+    summaries = {summary.layer_name: summary for summary in result.layer_summaries}
+
+    assert summaries["04_pad"].recognized_role == "pad"
+    assert summaries["04_pad"].recognized_label == "Pad"
+    assert summaries["04_pad"].display_label == format_layer_role_ui("pad")
+    assert summaries["04_pad"].state == "resolved"
+    assert summaries["04_pad"].badge_tone == "positive"
+    assert summaries["04_pad"].is_action_needed is False
+    assert summaries["06_wire"].recognized_role == "wire"
+    assert summaries["06_wire"].recognized_label == "Wire"
+    assert summaries["06_wire"].display_label == format_layer_role_ui("wire")
+    assert summaries["06_wire"].state == "resolved"
+    assert summaries["06_wire"].badge_tone == "positive"
+    assert summaries["06_wire"].is_action_needed is False
+
+
+def test_classify_semantic_layers_exposes_review_and_mixed_layer_summaries():
+    raw_entities = [
+        {
+            "type": "LWPOLYLINE",
+            "points": [(0.0, 0.5), (0.5, 1.0), (3.5, 1.0), (4.0, 0.5), (3.5, 0.0), (0.5, 0.0)],
+            "closed": True,
+            "layer": "07_slot_hole",
+        },
+        {
+            "type": "LWPOLYLINE",
+            "points": [(0.0, 0.0), (20.0, 0.0), (20.0, 12.0), (0.0, 12.0)],
+            "closed": True,
+            "layer": "01_substrate",
+        },
+        {"type": "CIRCLE", "center": (1.5, 1.5), "radius": 0.6, "layer": "01_substrate"},
+    ]
+    layer_info = [
+        {
+            "name": "07_slot_hole",
+            "color": 7,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": "hole",
+            "entity_count": 1,
+            "entity_types": {"LWPOLYLINE": 1},
+        },
+        {
+            "name": "01_substrate",
+            "color": 7,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": "substrate",
+            "entity_count": 2,
+            "entity_types": {"LWPOLYLINE": 1, "CIRCLE": 1},
+        },
+    ]
+
+    result = classify_semantic_layers(raw_entities, layer_info)
+    summaries = {summary.layer_name: summary for summary in result.layer_summaries}
+
+    assert summaries["07_slot_hole"].state == "review"
+    assert summaries["07_slot_hole"].recognized_role == "hole"
+    assert summaries["07_slot_hole"].badge_tone == "warning"
+    assert summaries["07_slot_hole"].is_action_needed is True
+    assert summaries["01_substrate"].state == "mixed"
+    assert summaries["01_substrate"].recognized_role is None
+    assert summaries["01_substrate"].badge_tone == "attention"
+    assert summaries["01_substrate"].is_action_needed is True
 
 
 def test_classify_semantic_layers_adds_die_region_module_and_pad_relations():
@@ -411,6 +530,45 @@ def test_classify_semantic_layers_supports_explicit_hole_layers():
     hole_entities = [entity for entity in result.entities if entity.kind == "hole"]
     assert len(hole_entities) == 1
     assert hole_entities[0].properties["hole_kind"] == "layer_defined"
+    assert hole_entities[0].properties["hole_shape"] == "round"
+    assert hole_entities[0].properties["rule_source"] == "explicit_hole_layer_round"
+
+
+def test_classify_semantic_layers_supports_explicit_slot_hole_layers_as_reviewable_holes():
+    raw_entities = [
+        {
+            "type": "LWPOLYLINE",
+            "points": [(0.0, 0.5), (0.5, 1.0), (3.5, 1.0), (4.0, 0.5), (3.5, 0.0), (0.5, 0.0)],
+            "closed": True,
+            "layer": "07_slot_hole",
+        },
+    ]
+    layer_info = [
+        {
+            "name": "07_slot_hole",
+            "color": 7,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": "hole",
+            "entity_count": 1,
+            "entity_types": {"LWPOLYLINE": 1},
+        }
+    ]
+
+    result = classify_semantic_layers(raw_entities, layer_info)
+
+    hole_entities = [entity for entity in result.entities if entity.kind == "hole"]
+    review_holes = [candidate for candidate in result.review if candidate.kind == "hole_candidate"]
+    assert len(hole_entities) == 0
+    assert len(review_holes) == 1
+    assert review_holes[0].properties["hole_shape"] == "slot"
+    assert review_holes[0].properties["slot_aspect_ratio"] >= 1.8
+    assert review_holes[0].properties["rule_source"] == "explicit_hole_layer_slot"
 
 
 def test_classify_semantic_layers_does_not_duplicate_explicit_hole_layers_inside_substrate():
@@ -494,6 +652,39 @@ def test_classify_semantic_layers_promotes_repeated_internal_substrate_circles_t
     hole_entities = [entity for entity in result.entities if entity.kind == "hole"]
     assert len(hole_entities) == 2
     assert all(entity.properties["hole_kind"] == "tooling" for entity in hole_entities)
+    assert {entity.properties["rule_source"] for entity in hole_entities} == {"substrate_repeated_round_hole"}
+
+
+def test_classify_semantic_layers_uses_mapped_type_when_suggested_role_is_missing():
+    raw_entities = [
+        {
+            "type": "LWPOLYLINE",
+            "points": [(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)],
+            "closed": True,
+            "layer": "04_custom_pad",
+        }
+    ]
+    layer_info = [
+        {
+            "name": "04_custom_pad",
+            "color": 1,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": "die_pad",
+            "suggested_role": None,
+            "entity_count": 1,
+            "entity_types": {"LWPOLYLINE": 1},
+        }
+    ]
+
+    result = classify_semantic_layers(raw_entities, layer_info)
+
+    pad_entities = [entity for entity in result.entities if entity.kind == "pad"]
+    assert len(pad_entities) == 1
 
 
 def test_classify_semantic_layers_promotes_lead_frame_circle_inside_substrate_to_hole():
@@ -594,3 +785,7 @@ def test_classify_semantic_layers_keeps_concentric_rounds_as_round_features():
     round_review = [candidate for candidate in result.review if candidate.kind == "round_feature_candidate"]
     assert len(hole_entities) == 0
     assert len(round_entities) + len(round_review) == 2
+    assert {
+        item.properties["rule_source"]
+        for item in [*round_entities, *round_review]
+    } == {"substrate_concentric_round"}
