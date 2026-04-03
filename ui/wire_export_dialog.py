@@ -37,6 +37,7 @@ from core.export import (
     WireRecipeTemplate,
     WireOrderingConfig,
     build_rx2000_default_template,
+    summarize_wb1_template_health,
 )
 from services import ProjectDocument, WireRecipeTemplateStore
 
@@ -94,6 +95,15 @@ def format_preview_point(x: float, y: float, z: float | None, default_z: float) 
 
     resolved_z = default_z if z is None else z
     return f"{x:.3f}, {y:.3f}, {resolved_z:.3f}"
+
+
+def build_template_health_text(template: WireRecipeTemplate) -> str:
+    """Render a short multi-line template health summary for the dialog."""
+
+    messages = summarize_wb1_template_health(template)
+    if not messages:
+        return "Ready."
+    return "\n".join(messages)
 
 
 class WireExportDialog(QDialog):
@@ -760,6 +770,7 @@ class WireExportDialog(QDialog):
         if template is None:
             self.preview_table.setRowCount(0)
             self.preview_summary_label.setText("Preview unavailable until the JSON fields are valid.")
+            self.status_label.setText("Preview unavailable until the JSON fields are valid.")
             return
 
         ordered_records = self._production_exporter.build_ordered_records(self.document.wire_geometries, template)
@@ -789,6 +800,7 @@ class WireExportDialog(QDialog):
             )
         else:
             self.preview_summary_label.setText("No wire geometries are available in the current document.")
+        self.status_label.setText(build_template_health_text(template))
 
     def _accept_export(self, *, export_wb1: bool, export_xlsm: bool) -> None:
         if not self.document.wire_geometries:
@@ -860,4 +872,4 @@ class WireExportDialog(QDialog):
         return json.dumps(payload, indent=2, sort_keys=True)
 
 
-__all__ = ["WireExportDialog", "WireExportRequest"]
+__all__ = ["WireExportDialog", "WireExportRequest", "build_template_health_text", "format_preview_point", "merge_rx2000_common_pfile_fields"]

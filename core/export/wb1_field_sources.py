@@ -566,6 +566,38 @@ def missing_required_wb1_j_fields(template: WireRecipeTemplate) -> tuple[str, ..
     )
 
 
+def summarize_wb1_template_health(template: WireRecipeTemplate) -> tuple[str, ...]:
+    """Return short user-facing notes about the current WB1 export readiness."""
+
+    messages: list[str] = []
+    required_fields = required_wb1_j_fields(template)
+    missing_fields = missing_required_wb1_j_fields(template)
+    if missing_fields:
+        messages.append("Missing required WB1 J fields: " + ", ".join(missing_fields) + ".")
+    else:
+        messages.append("Required WB1 J fields mapped: " + ", ".join(required_fields) + ".")
+
+    dxf_fields: list[str] = []
+    for field_name in ("role_code", "bond_x", "bond_y"):
+        if field_name in template.wb1_field_map:
+            dxf_fields.append(field_name)
+    if template.ordering.group_mode == "clustered" and "group_no" in template.wb1_field_map:
+        dxf_fields.append("group_no")
+    if template.bond_angle_mode == "wire_vector" and "bond_angle" in template.wb1_field_map:
+        dxf_fields.append("bond_angle")
+    if dxf_fields:
+        messages.append("Current DXF-driven J fields: " + ", ".join(dxf_fields) + ".")
+
+    if "bond_z" in template.wb1_field_map:
+        messages.append("bond_z uses explicit point Z when available, otherwise template default_z.")
+
+    camera_fields = {"camera_x", "camera_y", "camera_z"}
+    if camera_fields.issubset(template.wb1_field_map):
+        messages.append("camera_x/y/z currently export as 0 until camera calibration is modeled.")
+
+    return tuple(messages)
+
+
 def _j_field_write_categories(
     template: WireRecipeTemplate,
     field_name: str,
@@ -605,6 +637,7 @@ __all__ = [
     "current_j_segment_write_plan",
     "missing_required_wb1_j_fields",
     "required_wb1_j_fields",
+    "summarize_wb1_template_health",
     "rx2000_fields_available_from_dxf",
     "rx2000_fields_currently_written_from_dxf",
 ]

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from ui.wire_export_dialog import format_preview_point, merge_rx2000_common_pfile_fields
+from core.export.wire_models import WireOrderingConfig
+from core.export.wire_recipe_models import WireRecipeTemplate
+from ui.wire_export_dialog import (
+    build_template_health_text,
+    format_preview_point,
+    merge_rx2000_common_pfile_fields,
+)
 
 
 def test_merge_rx2000_common_pfile_fields_overlays_form_values_and_seeds_field_map():
@@ -27,3 +33,29 @@ def test_merge_rx2000_common_pfile_fields_overlays_form_values_and_seeds_field_m
 def test_format_preview_point_uses_default_z_only_when_point_z_is_missing():
     assert format_preview_point(1.0, 2.0, None, 7.5) == "1.000, 2.000, 7.500"
     assert format_preview_point(1.0, 2.0, 0.0, 7.5) == "1.000, 2.000, 0.000"
+
+
+def test_build_template_health_text_summarizes_current_wb1_export_mode():
+    template = WireRecipeTemplate(
+        template_id="demo",
+        name="Demo",
+        ordering=WireOrderingConfig(group_mode="clustered"),
+        bond_angle_mode="wire_vector",
+        wb1_field_map={
+            "role_code": 0,
+            "bond_x": 38,
+            "bond_y": 40,
+            "group_no": 19,
+            "bond_z": 42,
+            "camera_x": 32,
+            "camera_y": 34,
+            "camera_z": 36,
+        },
+    )
+
+    text = build_template_health_text(template)
+
+    assert "Missing required WB1 J fields: bond_angle." in text
+    assert "Current DXF-driven J fields: role_code, bond_x, bond_y, group_no." in text
+    assert "bond_z uses explicit point Z when available, otherwise template default_z." in text
+    assert "camera_x/y/z currently export as 0 until camera calibration is modeled." in text
