@@ -50,7 +50,7 @@ from .layer_thickness_dialog import LayerThicknessDialog
 from .layer_semantic_preset_dialog import LayerSemanticPresetDialog
 from .stack_preview_worker import StackPreviewWorker
 from .wire_export_dialog import WireExportDialog
-from .widgets import DXFPreviewView, LayerManagerPanel, ModelPreviewPanel, SemanticObjectsPanel
+from .widgets import DXFPreviewView, LayerManagerPanel, ModelPreviewPanel
 
 TOPBAR_BUTTON_WIDTH = 168
 
@@ -111,20 +111,10 @@ class MainWindow(QMainWindow):
         left_body = QWidget()
         left_body_layout = QHBoxLayout(left_body)
         left_body_layout.setContentsMargins(0, 0, 0, 0)
-        left_body_layout.setSpacing(12)
-
-        sidebar = QWidget()
-        sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(0, 0, 0, 0)
-        sidebar_layout.setSpacing(12)
+        left_body_layout.setSpacing(0)
 
         self.layer_panel = LayerManagerPanel()
-        sidebar_layout.addWidget(self.layer_panel, stretch=1)
-
-        self.semantic_panel = SemanticObjectsPanel()
-        sidebar_layout.addWidget(self.semantic_panel, stretch=1)
-
-        left_body_layout.addWidget(sidebar)
+        left_body_layout.addWidget(self.layer_panel)
 
         self.preview = DXFPreviewView()
         left_body_layout.addWidget(self.preview, stretch=1)
@@ -143,9 +133,6 @@ class MainWindow(QMainWindow):
         self.layer_panel.layer_visibility_changed.connect(self._handle_layer_visibility_changed)
         self.layer_panel.layer_selected.connect(self._handle_layer_selected)
         self.layer_panel.layer_thickness_requested.connect(self._edit_layer_thickness)
-        self.semantic_panel.semantic_item_selected.connect(self._handle_semantic_item_selected)
-        self.semantic_panel.review_override_requested.connect(self._handle_review_override_requested)
-        self.semantic_panel.preset_manage_requested.connect(self._open_semantic_preset_manager)
         self.status_stage = QLabel("Idle")
         self.status_stage.setObjectName("StatusBadge")
         self.status_file_label = QLabel("No file")
@@ -1293,7 +1280,6 @@ class MainWindow(QMainWindow):
     def _update_ui(self) -> None:
         self.preview.load_document(self.document)
         self.layer_panel.load_document(self.document)
-        self.semantic_panel.load_document(self.document)
         self.model_preview.load_document(self.document)
         self._refresh_layer_setup_button()
         self._set_import_actions_enabled(self._import_thread is None)

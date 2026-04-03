@@ -91,6 +91,59 @@ def test_classify_semantic_layers_promotes_core_rule_table_objects():
     assert set(hole_entities[0].properties["edge_contacts"]) == {"left"}
 
 
+def test_classify_semantic_layers_ignores_hatch_when_scanning_substrate_internals():
+    raw_entities = [
+        {
+            "type": "LWPOLYLINE",
+            "points": [(0.0, 0.0), (20.0, 0.0), (20.0, 12.0), (0.0, 12.0)],
+            "closed": True,
+            "layer": "01_substrate",
+        },
+        {
+            "type": "HATCH",
+            "paths": [[(2.0, 2.0), (6.0, 2.0), (6.0, 5.0), (2.0, 5.0)]],
+            "solid_fill": True,
+            "layer": "0",
+        },
+        {"type": "CIRCLE", "center": (3.0, 3.0), "radius": 1.0, "layer": "01_substrate"},
+    ]
+    layer_info = [
+        {
+            "name": "01_substrate",
+            "color": 7,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": "substrate",
+            "entity_count": 2,
+            "entity_types": {"LWPOLYLINE": 1, "CIRCLE": 1},
+        },
+        {
+            "name": "0",
+            "color": 7,
+            "linetype": "CONTINUOUS",
+            "is_off": False,
+            "is_frozen": False,
+            "is_locked": False,
+            "is_visible": True,
+            "plot": True,
+            "mapped_type": None,
+            "suggested_role": None,
+            "entity_count": 1,
+            "entity_types": {"HATCH": 1},
+        },
+    ]
+
+    result = classify_semantic_layers(raw_entities, layer_info)
+
+    assert any(entity.kind == "substrate" for entity in result.entities)
+    assert any(entity.kind == "hole" for entity in result.entities)
+
+
 def test_classify_semantic_layers_marks_module_regions_with_left_right_sides():
     raw_entities = [
         {

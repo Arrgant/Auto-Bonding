@@ -189,10 +189,11 @@ def _substrate_internal_rounds(
         role = layer_roles.get(str(entity.get("layer", "0")))
         if role in ignored_roles:
             continue
-        bbox = _entity_bbox(entity)
-        if not _bbox_inside(bbox, substrate_bbox):
-            continue
+        # Skip unsupported raw entities like HATCH/TEXT before asking for a bbox.
         if _round_entity_diameter(entity) is None:
+            continue
+        bbox = _optional_entity_bbox(entity)
+        if bbox is None or not _bbox_inside(bbox, substrate_bbox):
             continue
         rounds.append((index, entity))
     return rounds
@@ -289,7 +290,9 @@ def _classify_module_regions(raw_entities: list[RawEntity], layer_roles: dict[st
 def _classify_lead_frames(raw_entities: list[RawEntity], layer_roles: dict[str, str | None]) -> list[SemanticCandidate]:
     candidates: list[SemanticCandidate] = []
     for index, entity in _entities_for_role(raw_entities, layer_roles, "lead_frame"):
-        bbox = _entity_bbox(entity)
+        bbox = _optional_entity_bbox(entity)
+        if bbox is None:
+            continue
         aspect = _bbox_aspect_ratio(bbox)
         if aspect < 2.5 and entity["type"] != "LINE":
             continue
@@ -478,16 +481,26 @@ def _entity_points(entity: RawEntity) -> list[Point2D]:
     return []
 
 
-def _entity_bbox(entity: RawEntity) -> tuple[float, float, float, float]:
+def _optional_entity_bbox(entity: RawEntity) -> tuple[float, float, float, float] | None:
     if entity["type"] == "CIRCLE":
         center_x, center_y = entity["center"]
         radius = float(entity["radius"])
         return center_x - radius, center_y - radius, center_x + radius, center_y + radius
 
     points = _entity_points(entity)
+    if not points:
+        return None
+
     x_values = [float(point[0]) for point in points]
     y_values = [float(point[1]) for point in points]
     return min(x_values), min(y_values), max(x_values), max(y_values)
+
+
+def _entity_bbox(entity: RawEntity) -> tuple[float, float, float, float]:
+    bbox = _optional_entity_bbox(entity)
+    if bbox is None:
+        raise ValueError(f"Entity {entity.get('type', 'UNKNOWN')} has no bounding box points")
+    return bbox
 
 
 def _entity_center(entity: RawEntity) -> tuple[float, float]:
