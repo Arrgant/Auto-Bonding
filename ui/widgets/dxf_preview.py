@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QEvent, QLineF, QPointF, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QFrame, QGraphicsItem, QGraphicsScene, QGraphicsView, QLabel
 
 from core.layer_colors import build_layer_color_map, tint_color
@@ -37,6 +37,7 @@ class DXFPreviewView(QGraphicsView):
         self._item_styles: dict[QGraphicsItem, dict[str, Any]] = {}
         self._selection_override: int | None = None
         self._layer_colors: dict[str, str] = {}
+        self._layer_linetypes: dict[str, str] = {}
         self._current_document: ProjectDocument | None = None
         self._focused_layer_name: str | None = None
         self._selected_entity_index: int | None = None
@@ -96,6 +97,10 @@ class DXFPreviewView(QGraphicsView):
             document.layer_info,
             document.raw_entities,
         )
+        self._layer_linetypes = {
+            str(layer.get("name", "0")): str(layer.get("linetype", "CONTINUOUS"))
+            for layer in document.layer_info
+        }
         for preview_entity in build_preview_entities(document.raw_entities, document.layer_info):
             layer_name = str(preview_entity.entity.get("layer", "0"))
             if layer_name not in visible_layers:
@@ -105,9 +110,9 @@ class DXFPreviewView(QGraphicsView):
                 preview_entity.entity_index,
                 source_count=len(preview_entity.source_indices),
                 source_indices=preview_entity.source_indices,
+                z_value=float(layer_order.get(layer_name, 0)),
             )
             if item is not None:
-                item.setZValue(float(layer_order.get(layer_name, 0)))
                 rendered_count += 1
 
         self._scene_rect = QRectF(*document.scene_rect)
@@ -247,25 +252,33 @@ class DXFPreviewView(QGraphicsView):
         *,
         width: float,
         fill_color: str | None = None,
+        linetype_name: str = "CONTINUOUS",
+        fill_alpha: int = 72,
+        text_fill: bool = False,
     ) -> dict[str, Any]:
         pen = QPen(QColor(stroke_color))
         pen.setWidthF(width)
         pen.setCosmetic(True)
+        pen.setStyle(self._resolve_pen_style(linetype_name))
 
         selected_pen = QPen(QColor("#FFD166"))
         selected_pen.setWidthF(width + 2.0)
         selected_pen.setCosmetic(True)
+        selected_pen.setStyle(self._resolve_pen_style(linetype_name))
 
         brush = QBrush(Qt.BrushStyle.NoBrush)
         selected_brush = QBrush(Qt.BrushStyle.NoBrush)
         if fill_color is not None:
             fill = QColor(fill_color)
-            fill.setAlpha(72)
+            fill.setAlpha(fill_alpha)
             brush = QBrush(fill)
 
             selected_fill = QColor("#FFB703")
             selected_fill.setAlpha(150)
             selected_brush = QBrush(selected_fill)
+        elif text_fill:
+            brush = QBrush(QColor(stroke_color))
+            selected_brush = QBrush(QColor("#FFD166"))
 
         return {
             "pen": pen,
@@ -273,6 +286,18 @@ class DXFPreviewView(QGraphicsView):
             "brush": brush,
             "selected_brush": selected_brush,
         }
+
+    def _resolve_pen_style(self, linetype_name: str) -> Qt.PenStyle:
+        normalized_name = str(linetype_name or "CONTINUOUS").upper()
+        if "PHANTOM" in normalized_name:
+            return Qt.PenStyle.DashDotDotLine
+        if "CENTER" in normalized_name:
+            return Qt.PenStyle.DashDotLine
+        if "DASH" in normalized_name or "HIDDEN" in normalized_name:
+            return Qt.PenStyle.DashLine
+        if "DOT" in normalized_name:
+            return Qt.PenStyle.DotLine
+        return Qt.PenStyle.SolidLine
 
     def _register_item(
         self,
@@ -396,16 +421,31 @@ class DXFPreviewView(QGraphicsView):
         *,
         source_count: int = 1,
         source_indices: tuple[int, ...] = (),
+        z_value: float | None = None,
     ) -> QGraphicsItem | None:
         layer_name = str(entity.get("layer", "0"))
         layer_color = self._layer_colors.get(layer_name, "#E8E8E8")
+        layer_linetype = self._layer_linetypes.get(layer_name, "CONTINUOUS")
+
+        if (
+            self._current_document is not None
+            and self._current_document.visible_layers
+            and layer_name not in self._current_document.visible_layers
+        ):
+            return None
 
         entity_type = entity["type"]
         if entity_type == "LINE":
-            style = self._make_style(layer_color, width=1.0 if source_count <= 1 else 2.6)
+            style = self._make_style(
+                layer_color,
+                width=1.0 if source_count <= 1 else 2.6,
+                linetype_name=layer_linetype,
+            )
             x1, y1 = entity["start"]
             x2, y2 = entity["end"]
             item = self._scene.addLine(x1, -y1, x2, -y2, style["pen"])
+            if z_value is not None:
+                item.setZValue(z_value)
             return self._register_item(
                 item,
                 entity_index,
@@ -417,7 +457,12 @@ class DXFPreviewView(QGraphicsView):
             )
 
         if entity_type == "CIRCLE":
-            style = self._make_style(layer_color, width=1.7, fill_color=tint_color(layer_color, ratio=0.18))
+            style = self._make_style(
+                layer_color,
+                width=1.7,
+                fill_color=tint_color(layer_color, ratio=0.18),
+                linetype_name=layer_linetype,
+            )
             center_x, center_y = entity["center"]
             radius = entity["radius"]
             item = self._scene.addEllipse(
@@ -428,6 +473,8 @@ class DXFPreviewView(QGraphicsView):
                 style["pen"],
                 style["brush"],
             )
+            if z_value is not None:
+                item.setZValue(z_value)
             return self._register_item(
                 item,
                 entity_index,
@@ -442,17 +489,48 @@ class DXFPreviewView(QGraphicsView):
             points = entity.get("points") or []
             if len(points) < 2:
                 return None
-            style = self._make_style(layer_color, width=1.3)
+            style = self._make_style(layer_color, width=1.3, linetype_name=layer_linetype)
             path = QPainterPath(QPointF(points[0][0], -points[0][1]))
             for x_value, y_value in points[1:]:
                 path.lineTo(x_value, -y_value)
             item = self._scene.addPath(path, style["pen"])
+            if z_value is not None:
+                item.setZValue(z_value)
             return self._register_item(
                 item,
                 entity_index,
                 layer_name,
                 style,
                 is_closed=False,
+                source_count=source_count,
+                source_indices=source_indices or (entity_index,),
+            )
+
+        if entity_type == "ELLIPSE":
+            points = entity.get("points") or []
+            if len(points) < 2:
+                return None
+            is_closed = bool(entity.get("closed"))
+            style = self._make_style(
+                layer_color,
+                width=1.4,
+                fill_color=tint_color(layer_color, ratio=0.18) if is_closed else None,
+                linetype_name=layer_linetype,
+            )
+            path = QPainterPath(QPointF(points[0][0], -points[0][1]))
+            for x_value, y_value in points[1:]:
+                path.lineTo(x_value, -y_value)
+            if is_closed:
+                path.closeSubpath()
+            item = self._scene.addPath(path, style["pen"], style["brush"])
+            if z_value is not None:
+                item.setZValue(z_value)
+            return self._register_item(
+                item,
+                entity_index,
+                layer_name,
+                style,
+                is_closed=is_closed,
                 source_count=source_count,
                 source_indices=source_indices or (entity_index,),
             )
@@ -466,6 +544,7 @@ class DXFPreviewView(QGraphicsView):
                 layer_color,
                 width=2.1 if is_closed else 1.8,
                 fill_color=tint_color(layer_color, ratio=0.16) if is_closed else None,
+                linetype_name=layer_linetype,
             )
             path = QPainterPath(QPointF(points[0][0], -points[0][1]))
             for x_value, y_value in points[1:]:
@@ -473,6 +552,8 @@ class DXFPreviewView(QGraphicsView):
             if is_closed:
                 path.closeSubpath()
             item = self._scene.addPath(path, style["pen"], style["brush"])
+            if z_value is not None:
+                item.setZValue(z_value)
             return self._register_item(
                 item,
                 entity_index,
@@ -484,7 +565,12 @@ class DXFPreviewView(QGraphicsView):
             )
 
         if entity_type == "POINT":
-            style = self._make_style(layer_color, width=1.1, fill_color=tint_color(layer_color, ratio=0.2))
+            style = self._make_style(
+                layer_color,
+                width=1.1,
+                fill_color=tint_color(layer_color, ratio=0.2),
+                linetype_name=layer_linetype,
+            )
             x_value, y_value = entity["location"]
             item = self._scene.addEllipse(
                 x_value - 1.8,
@@ -494,6 +580,8 @@ class DXFPreviewView(QGraphicsView):
                 style["pen"],
                 style["brush"],
             )
+            if z_value is not None:
+                item.setZValue(z_value)
             return self._register_item(
                 item,
                 entity_index,
@@ -503,5 +591,121 @@ class DXFPreviewView(QGraphicsView):
                 source_count=source_count,
                 source_indices=source_indices or (entity_index,),
             )
+
+        if entity_type in {"TEXT", "MTEXT", "ATTRIB", "ATTDEF"}:
+            text_value = str(entity.get("text") or "")
+            if not text_value.strip():
+                return None
+
+            style = self._make_style(
+                layer_color,
+                width=0.6,
+                linetype_name="CONTINUOUS",
+                text_fill=True,
+            )
+            text_font = QFont("Segoe UI")
+            text_font.setPointSizeF(12.0)
+            item = self._scene.addSimpleText(text_value, text_font)
+            text_height = max(float(entity.get("height", 1.0) or 1.0), 0.1)
+            item_height = max(float(item.boundingRect().height()), 1e-6)
+            item.setScale(text_height / item_height)
+
+            insert_x, insert_y = entity["insert"]
+            item.setPos(insert_x, -insert_y - text_height)
+            item.setRotation(-float(entity.get("rotation", 0.0) or 0.0))
+            if z_value is not None:
+                item.setZValue(z_value)
+
+            return self._register_item(
+                item,
+                entity_index,
+                layer_name,
+                style,
+                is_closed=False,
+                source_count=source_count,
+                source_indices=source_indices or (entity_index,),
+            )
+
+        if entity_type == "SOLID":
+            points = entity.get("points") or []
+            if len(points) < 3:
+                return None
+
+            style = self._make_style(
+                layer_color,
+                width=0.0,
+                fill_color=tint_color(layer_color, ratio=0.26),
+                linetype_name="CONTINUOUS",
+                fill_alpha=104,
+            )
+            path = QPainterPath(QPointF(points[0][0], -points[0][1]))
+            for x_value, y_value in points[1:]:
+                path.lineTo(x_value, -y_value)
+            path.closeSubpath()
+
+            item = self._scene.addPath(path, style["pen"], style["brush"])
+            if z_value is not None:
+                item.setZValue(z_value)
+            return self._register_item(
+                item,
+                entity_index,
+                layer_name,
+                style,
+                is_closed=True,
+                source_count=source_count,
+                source_indices=source_indices or (entity_index,),
+            )
+
+        if entity_type == "HATCH":
+            hatch_paths = entity.get("paths") or []
+            if not hatch_paths:
+                return None
+
+            style = self._make_style(
+                layer_color,
+                width=0.0 if bool(entity.get("solid_fill", True)) else 0.8,
+                fill_color=tint_color(layer_color, ratio=0.22),
+                linetype_name="CONTINUOUS",
+                fill_alpha=96,
+            )
+            painter_path = QPainterPath()
+            for path_points in hatch_paths:
+                if len(path_points) < 2:
+                    continue
+                painter_path.moveTo(path_points[0][0], -path_points[0][1])
+                for x_value, y_value in path_points[1:]:
+                    painter_path.lineTo(x_value, -y_value)
+                painter_path.closeSubpath()
+
+            if painter_path.isEmpty():
+                return None
+
+            item = self._scene.addPath(painter_path, style["pen"], style["brush"])
+            if z_value is not None:
+                item.setZValue(z_value)
+            return self._register_item(
+                item,
+                entity_index,
+                layer_name,
+                style,
+                is_closed=True,
+                source_count=source_count,
+                source_indices=source_indices or (entity_index,),
+            )
+
+        if entity_type == "INSERT":
+            children = entity.get("entities") or []
+            first_item: QGraphicsItem | None = None
+            for child_entity in children:
+                child_item = self._draw_entity(
+                    child_entity,
+                    entity_index,
+                    source_count=source_count,
+                    source_indices=source_indices or (entity_index,),
+                    z_value=z_value,
+                )
+                if first_item is None and child_item is not None:
+                    first_item = child_item
+            return first_item
 
         return None

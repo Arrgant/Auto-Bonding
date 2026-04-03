@@ -33,6 +33,13 @@ class RawArcEntity(TypedDict):
     layer: str
 
 
+class RawEllipseEntity(TypedDict):
+    type: Literal["ELLIPSE"]
+    points: list[Point2D]
+    closed: bool
+    layer: str
+
+
 class RawLWPolylineEntity(TypedDict):
     type: Literal["LWPOLYLINE"]
     points: list[Point2D]
@@ -46,7 +53,52 @@ class RawPointEntity(TypedDict):
     layer: str
 
 
-RawEntity = RawLineEntity | RawCircleEntity | RawArcEntity | RawLWPolylineEntity | RawPointEntity
+class RawTextEntity(TypedDict):
+    type: Literal["TEXT", "MTEXT", "ATTRIB", "ATTDEF"]
+    text: str
+    insert: Point2D
+    height: float
+    rotation: float
+    box_width: float
+    layer: str
+
+
+class RawHatchEntity(TypedDict):
+    type: Literal["HATCH"]
+    paths: list[list[Point2D]]
+    solid_fill: bool
+    layer: str
+
+
+class RawSolidEntity(TypedDict):
+    type: Literal["SOLID"]
+    points: list[Point2D]
+    layer: str
+
+
+class RawInsertEntity(TypedDict):
+    type: Literal["INSERT"]
+    name: str
+    insert: Point2D
+    rotation: float
+    xscale: float
+    yscale: float
+    entities: list["RawEntity"]
+    layer: str
+
+
+RawEntity = (
+    RawLineEntity
+    | RawCircleEntity
+    | RawArcEntity
+    | RawEllipseEntity
+    | RawLWPolylineEntity
+    | RawPointEntity
+    | RawTextEntity
+    | RawHatchEntity
+    | RawSolidEntity
+    | RawInsertEntity
+)
 
 
 class LayerInfo(TypedDict):
@@ -70,9 +122,14 @@ __all__ = [
     "Point2D",
     "RawArcEntity",
     "RawCircleEntity",
+    "RawEllipseEntity",
     "RawEntity",
+    "RawHatchEntity",
+    "RawInsertEntity",
     "RawLineEntity",
     "RawLWPolylineEntity",
     "RawPointEntity",
+    "RawSolidEntity",
+    "RawTextEntity",
     "SceneRect",
 ]
