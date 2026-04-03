@@ -9,7 +9,7 @@ from PySide6.Qt3DExtras import Qt3DExtras
 from PySide6.Qt3DRender import Qt3DRender
 from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtGui import QColor, QVector3D
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QStackedLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QStackedLayout, QVBoxLayout, QWidget
 
 from services import ProjectDocument
 
@@ -295,6 +295,27 @@ class ModelPreviewPanel(QFrame):
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
 
+        self.progress_row = QWidget(self)
+        progress_layout = QVBoxLayout(self.progress_row)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(6)
+
+        self.progress_label = QLabel("Preparing 3D preview.", self.progress_row)
+        self.progress_label.setObjectName("MutedLabel")
+        self.progress_label.setWordWrap(True)
+        progress_layout.addWidget(self.progress_label)
+
+        self.progress_bar = QProgressBar(self.progress_row)
+        self.progress_bar.setObjectName("ViewerProgressBar")
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setMaximumHeight(8)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        progress_layout.addWidget(self.progress_bar)
+
+        self.progress_row.hide()
+        layout.addWidget(self.progress_row)
+
         self.surface = AssemblyPreviewWidget()
         layout.addWidget(self.surface, stretch=1)
 
@@ -304,16 +325,36 @@ class ModelPreviewPanel(QFrame):
     def set_import_action_enabled(self, enabled: bool) -> None:
         self.surface.set_import_action_enabled(enabled)
 
+    def show_build_progress(
+        self,
+        label: str,
+        *,
+        value: int | None = None,
+        maximum: int | None = None,
+    ) -> None:
+        self.progress_label.setText(label)
+        if value is None or maximum is None or maximum <= 0:
+            self.progress_bar.setRange(0, 0)
+        else:
+            self.progress_bar.setRange(0, maximum)
+            self.progress_bar.setValue(max(0, min(value, maximum)))
+        self.progress_row.show()
+
+    def hide_build_progress(self) -> None:
+        self.progress_row.hide()
+
     def load_document(self, document: ProjectDocument | None, *, progressive: bool = False) -> None:
         if document is None:
             self._set_status("Idle")
             self.summary.setText("Import a DXF to start the stacked preview.")
+            self.hide_build_progress()
             self.surface.show_placeholder("Import a DXF to generate the stacked model.", action_text="Import DXF")
             return
 
         if document.stack_preview_assembly is not None:
             self._set_status("Ready", tone="good")
             self.summary.setText(document.note or "Stacked preview ready.")
+            self.hide_build_progress()
             layer_meshes = document.stack_preview_layer_meshes or build_layer_mesh_payloads(
                 document.stack_preview_assembly,
                 document.layer_colors,
@@ -327,12 +368,14 @@ class ModelPreviewPanel(QFrame):
         if document.layer_meshes:
             self._set_status("Ready", tone="good")
             self.summary.setText(document.note or "Stacked preview ready.")
+            self.hide_build_progress()
             self.surface.load_layer_meshes(document.layer_meshes)
             return
 
         if document.mesh_bytes is not None and document.mesh_vertex_count > 0:
             self._set_status("Ready", tone="good")
             self.summary.setText(document.note or "Stacked preview ready.")
+            self.hide_build_progress()
             self.surface.load_mesh_payload(
                 document.mesh_bytes,
                 document.mesh_vertex_count,
@@ -341,18 +384,22 @@ class ModelPreviewPanel(QFrame):
         elif document.assembly is not None:
             self._set_status("Ready", tone="good")
             self.summary.setText(document.note or "Stacked preview ready.")
+            self.hide_build_progress()
             self.surface.load_assembly(document.assembly, progressive=progressive)
         elif document.status == "building-3d":
             self._set_status("Building", tone="busy")
             self.summary.setText("Generating the stacked model from the current layer setup.")
+            self.show_build_progress(document.note or "Generating the stacked model.")
             self.surface.show_placeholder("Generating the stacked model from the current layers.")
         elif document.status == "preview-ready":
             self._set_status("2D Ready", tone="warn")
             self.summary.setText("Set layer thickness to continue into the stacked 3D preview.")
+            self.show_build_progress("Waiting for layer thickness before 3D generation.", value=35, maximum=100)
             self.surface.show_placeholder("Set layer thickness to continue into the stacked 3D preview.")
         else:
             self._set_status("Unavailable", tone="warn")
             self.summary.setText(document.note or "3D preview is unavailable for the current document.")
+            self.hide_build_progress()
             self.surface.show_placeholder("3D preview is unavailable for the current document.")
 
     def _set_status(self, text: str, *, tone: str = "neutral") -> None:

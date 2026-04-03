@@ -81,25 +81,41 @@ class LayerManagerPanel(QFrame):
             return
 
         visible_layers = set(document.visible_layers)
-        active_layers = [
+        populated_layers = [
             layer
             for layer in sorted(document.layer_info, key=lambda item: layer_sort_key(str(item["name"])))
+            if layer.get("entity_count", 0) > 0
+        ]
+        active_layers = [
+            layer
+            for layer in populated_layers
             if layer.get("enabled", True) and layer.get("entity_count", 0) > 0
         ]
 
         self.tree.setEnabled(bool(active_layers))
         if not active_layers:
-            self.active_badge.setText("0 active")
+            self.active_badge.setText("0 imported")
             self.visible_badge.setText("0 shown")
-            self.summary.setText("No active layers in the current import.")
+            self.summary.setText("No populated DXF layers are currently imported.")
             self._syncing = False
             return
 
         active_names = {str(layer["name"]) for layer in active_layers}
         visible_count = len(active_names & visible_layers)
-        self.active_badge.setText(f"{len(active_layers)} active")
+        skipped_count = max(len(populated_layers) - len(active_layers), 0)
+        remapped_count = len(document.layer_mapping_overrides)
+        self.active_badge.setText(f"{len(active_layers)} imported")
         self.visible_badge.setText(f"{visible_count} shown")
-        self.summary.setText("Click to focus a layer. Double-click a row to set thickness.")
+        summary = (
+            "Viewer-only toggles. Use Import Layers above to exclude or remap DXF layers. "
+            "Double-click a row to set thickness."
+        )
+        if skipped_count or remapped_count:
+            summary = (
+                f"{len(active_layers)} imported, {skipped_count} skipped, {remapped_count} remapped. "
+                "Checkboxes here only hide or show imported layers."
+            )
+        self.summary.setText(summary)
         selected_item: QTreeWidgetItem | None = None
 
         for layer in active_layers:

@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QEvent, QLineF, QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QFrame, QGraphicsItem, QGraphicsScene, QGraphicsView
+from PySide6.QtWidgets import QFrame, QGraphicsItem, QGraphicsScene, QGraphicsView, QLabel
 
 from core.layer_colors import build_layer_color_map, tint_color
 from core.layer_stack import build_layer_order_map
@@ -37,6 +37,9 @@ class DXFPreviewView(QGraphicsView):
         self._item_styles: dict[QGraphicsItem, dict[str, Any]] = {}
         self._selection_override: int | None = None
         self._layer_colors: dict[str, str] = {}
+        self._current_document: ProjectDocument | None = None
+        self._focused_layer_name: str | None = None
+        self._selected_entity_index: int | None = None
 
         self.file_drop_handler: Callable[[Path], None] | None = None
         self.import_requested_handler: Callable[[], None] | None = None
@@ -63,17 +66,26 @@ class DXFPreviewView(QGraphicsView):
         self.placeholder.action_requested.connect(self._handle_import_requested)
         self._scene.selectionChanged.connect(self._handle_selection_changed)
 
+        self.focus_banner = QLabel(self.viewport())
+        self.focus_banner.setObjectName("ViewerInfoBadge")
+        self.focus_banner.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.focus_banner.hide()
+
     def load_document(self, document: ProjectDocument | None) -> None:
+        self._current_document = document
         self._scene.clear()
         self._item_styles.clear()
         self._has_content = False
 
         if document is None or not document.raw_entities:
+            self._focused_layer_name = None
+            self._selected_entity_index = None
             self.placeholder.set_content("2D Preview", "Import a DXF or drop it here.")
             self.placeholder.set_action("Import DXF")
             self._scene.setSceneRect(self._scene_rect)
             self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
             self.placeholder.show()
+            self.focus_banner.hide()
             self._position_placeholder()
             return
 
@@ -103,22 +115,28 @@ class DXFPreviewView(QGraphicsView):
         self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
         self._has_content = rendered_count > 0
         if rendered_count <= 0:
+            self._focused_layer_name = None
+            self._selected_entity_index = None
             self.placeholder.set_content("2D Preview", "All layers are hidden. Re-enable one from Layers.")
             self.placeholder.set_action(None)
             self.placeholder.show()
+            self.focus_banner.hide()
             self._position_placeholder()
             return
 
         self._apply_layer_focus(document.selected_layer_name)
+        self._selected_entity_index = document.selected_entity_index
         if document.selected_entity_index is not None:
             self.focus_entity(document.selected_entity_index, center=False)
         self.placeholder.hide()
+        self._update_focus_banner()
 
     def resizeEvent(self, event) -> None:  # pragma: no cover
         super().resizeEvent(event)
         if self._has_content:
             self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
         self._position_placeholder()
+        self._position_focus_banner()
 
     def mousePressEvent(self, event) -> None:  # pragma: no cover
         super().mousePressEvent(event)
@@ -160,6 +178,9 @@ class DXFPreviewView(QGraphicsView):
         x_pos = (self.viewport().width() - self.placeholder.width()) // 2
         y_pos = (self.viewport().height() - self.placeholder.height()) // 2
         self.placeholder.move(max(0, x_pos), max(0, y_pos))
+
+    def _position_focus_banner(self) -> None:
+        self.focus_banner.move(14, 12)
 
     def set_import_action_enabled(self, enabled: bool) -> None:
         if not self.placeholder.action_button.isVisible():
@@ -232,7 +253,7 @@ class DXFPreviewView(QGraphicsView):
         pen.setCosmetic(True)
 
         selected_pen = QPen(QColor("#FFD166"))
-        selected_pen.setWidthF(width + 1.25)
+        selected_pen.setWidthF(width + 2.0)
         selected_pen.setCosmetic(True)
 
         brush = QBrush(Qt.BrushStyle.NoBrush)
@@ -243,7 +264,7 @@ class DXFPreviewView(QGraphicsView):
             brush = QBrush(fill)
 
             selected_fill = QColor("#FFB703")
-            selected_fill.setAlpha(110)
+            selected_fill.setAlpha(150)
             selected_brush = QBrush(selected_fill)
 
         return {
@@ -300,11 +321,14 @@ class DXFPreviewView(QGraphicsView):
                         selected_index = entity_index
 
         self._selection_override = None
+        self._selected_entity_index = selected_index
+        self._update_focus_banner()
 
         if self.selection_changed_handler is not None:
             self.selection_changed_handler(selected_index)
 
     def _apply_layer_focus(self, layer_name: str | None) -> None:
+        self._focused_layer_name = layer_name
         if not layer_name:
             for item in self._item_styles:
                 item.setOpacity(1.0)
@@ -312,13 +336,15 @@ class DXFPreviewView(QGraphicsView):
 
         for item in self._item_styles:
             item_layer = item.data(LAYER_NAME_ROLE)
-            item.setOpacity(1.0 if item_layer == layer_name else 0.22)
+            item.setOpacity(1.0 if item_layer == layer_name else 0.14)
 
     def focus_entity(self, entity_index: int | None, *, center: bool = True) -> None:
         self._selection_override = entity_index
+        self._selected_entity_index = entity_index
         self._scene.clearSelection()
 
         if entity_index is None:
+            self._update_focus_banner()
             return
 
         for item in self._item_styles:
@@ -329,6 +355,39 @@ class DXFPreviewView(QGraphicsView):
                 if center:
                     self.centerOn(item)
                 return
+
+        self._update_focus_banner()
+
+    def _update_focus_banner(self) -> None:
+        if self._current_document is None or not self._has_content:
+            self.focus_banner.hide()
+            return
+
+        banner_text: str | None = None
+        if (
+            isinstance(self._selected_entity_index, int)
+            and 0 <= self._selected_entity_index < len(self._current_document.raw_entities)
+        ):
+            entity = self._current_document.raw_entities[self._selected_entity_index]
+            layer_name = str(entity.get("layer", "0"))
+            banner_text = f"Selected {entity['type']} on {layer_name}"
+            thickness = self._current_document.entity_thicknesses.get(self._selected_entity_index)
+            if thickness is not None:
+                banner_text += f" | {thickness:.3f} mm"
+        elif isinstance(self._focused_layer_name, str) and self._focused_layer_name:
+            banner_text = f"Focused layer {self._focused_layer_name}"
+            thickness = self._current_document.layer_thicknesses.get(self._focused_layer_name)
+            if thickness is not None:
+                banner_text += f" | {thickness:.3f} mm"
+
+        if not banner_text:
+            self.focus_banner.hide()
+            return
+
+        self.focus_banner.setText(banner_text)
+        self.focus_banner.adjustSize()
+        self._position_focus_banner()
+        self.focus_banner.show()
 
     def _draw_entity(
         self,

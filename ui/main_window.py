@@ -46,6 +46,7 @@ from services import LayerSemanticPresetStore, ProjectDocument, WireRecipeTempla
 
 from .import_worker import ImportWorker
 from .layer_config_dialog import LayerConfigDialog
+from .layer_thickness_dialog import LayerThicknessDialog
 from .layer_semantic_preset_dialog import LayerSemanticPresetDialog
 from .stack_preview_worker import StackPreviewWorker
 from .wire_export_dialog import WireExportDialog
@@ -69,6 +70,7 @@ class MainWindow(QMainWindow):
         self._stack_preview_thread: QThread | None = None
         self._stack_preview_worker: StackPreviewWorker | None = None
         self._pending_import_config: dict[str, Any] | None = None
+        self._pending_layer_setup_message: str | None = None
         self._skip_next_walkthrough = False
         self._layer_walkthrough_queue: list[str] = []
         self._layer_walkthrough_index = -1
@@ -142,7 +144,11 @@ class MainWindow(QMainWindow):
         self.semantic_panel.review_override_requested.connect(self._handle_review_override_requested)
         self.semantic_panel.preset_manage_requested.connect(self._open_semantic_preset_manager)
 
-        self.status_label = QLabel("Ready")
+        self.status_stage = QLabel("Idle")
+        self.status_stage.setObjectName("StatusBadge")
+        self.status_file_label = QLabel("No file")
+        self.status_file_label.setObjectName("StatusMeta")
+        self.status_label = QLabel("Import a DXF to begin.")
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
@@ -151,6 +157,8 @@ class MainWindow(QMainWindow):
         self.progress.setMaximumHeight(8)
 
         statusbar = QStatusBar()
+        statusbar.addWidget(self.status_stage)
+        statusbar.addWidget(self.status_file_label)
         statusbar.addWidget(self.status_label, 1)
         statusbar.addPermanentWidget(self.progress)
         self.setStatusBar(statusbar)
@@ -188,7 +196,7 @@ class MainWindow(QMainWindow):
         )
         self.layers_button = self._build_icon_button(
             self._make_toolbar_icon("layers"),
-            "Layer Setup",
+            "Import Layers",
             self._open_layer_setup,
         )
         self.export_button = self._build_menu_button(
@@ -199,6 +207,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.import_button)
         layout.addWidget(self.layers_button)
         layout.addWidget(self.export_button)
+        self._refresh_layer_setup_button()
         return top
 
     def _build_icon_button(self, icon: QIcon, label: str, handler) -> QToolButton:
@@ -347,6 +356,58 @@ class MainWindow(QMainWindow):
                 color: #DEEAF9;
                 border: 1px solid #425B79;
             }
+            #ViewerInfoBadge {
+                background: rgba(25, 25, 25, 0.88);
+                color: #F4F4F4;
+                border: 1px solid #414141;
+                border-radius: 999px;
+                padding: 4px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            #StatusBadge {
+                background: #2A2A2A;
+                color: #D6D6D6;
+                border: 1px solid #353535;
+                border-radius: 999px;
+                padding: 2px 10px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            #StatusBadge[tone="good"] {
+                background: #1E4D3A;
+                color: #E2F7EA;
+                border: 1px solid #2F7A5C;
+            }
+            #StatusBadge[tone="warn"] {
+                background: #533A1D;
+                color: #FFE8C7;
+                border: 1px solid #7A5730;
+            }
+            #StatusBadge[tone="busy"] {
+                background: #28374A;
+                color: #DEEAF9;
+                border: 1px solid #425B79;
+            }
+            #StatusBadge[tone="error"] {
+                background: #5A2323;
+                color: #FFE4E4;
+                border: 1px solid #8B3A3A;
+            }
+            #StatusMeta {
+                color: #8E8E8E;
+                padding-left: 8px;
+                padding-right: 8px;
+            }
+            #ViewerProgressBar {
+                background: #1D1D1D;
+                border: 1px solid #303030;
+                border-radius: 999px;
+            }
+            #ViewerProgressBar::chunk {
+                background: #D45B2E;
+                border-radius: 999px;
+            }
             #PlaceholderActionButton {
                 background: #D45B2E;
                 color: #FFFFFF;
@@ -370,6 +431,7 @@ class MainWindow(QMainWindow):
             QMenu::item:selected {
                 background: #E53935;
             }
+            QStatusBar::item { border: none; }
             QTreeWidget {
                 background: #202020;
                 border: 1px solid #303030;
@@ -445,7 +507,12 @@ class MainWindow(QMainWindow):
             return
 
         self._pending_import_config = self._config(layer_settings=layer_settings, preview_only=preview_only)
-        self.status_label.setText(f"Parsing {file_path.name}...")
+        self._set_status_message(
+            "Reading DXF and extracting layers.",
+            stage="Parsing",
+            tone="busy",
+            file_name=file_path.name,
+        )
         self.progress.setRange(0, 0)
         self.import_button.setEnabled(False)
         self.layers_button.setEnabled(False)
@@ -473,9 +540,53 @@ class MainWindow(QMainWindow):
             "layer_mapping_overrides": dict(self.document.layer_mapping_overrides),
         }
 
+    def _layer_setup_metrics(
+        self,
+        layer_info: list[dict[str, Any]],
+        enabled_layers: set[str],
+        layer_mapping_overrides: dict[str, str],
+    ) -> tuple[int, int, int]:
+        populated_names = {
+            str(layer["name"])
+            for layer in layer_info
+            if int(layer.get("entity_count", 0)) > 0
+        }
+        scope_names = populated_names or {str(layer["name"]) for layer in layer_info}
+        imported_count = len(scope_names & set(enabled_layers))
+        skipped_count = max(len(scope_names) - imported_count, 0)
+        remapped_count = len(layer_mapping_overrides)
+        return imported_count, skipped_count, remapped_count
+
+    def _format_layer_setup_summary(self, imported_count: int, skipped_count: int, remapped_count: int) -> str:
+        parts = [f"{imported_count} imported"]
+        if skipped_count:
+            parts.append(f"{skipped_count} skipped")
+        if remapped_count:
+            parts.append(f"{remapped_count} remapped")
+        return ", ".join(parts)
+
+    def _refresh_layer_setup_button(self) -> None:
+        self.layers_button.setText("Import Layers")
+        if self.document is None:
+            self.layers_button.setToolTip(
+                "Choose which DXF layers are imported and how they map into layer roles."
+            )
+            return
+
+        imported_count, skipped_count, remapped_count = self._layer_setup_metrics(
+            self.document.layer_info,
+            set(self.document.enabled_layers),
+            dict(self.document.layer_mapping_overrides),
+        )
+        summary = self._format_layer_setup_summary(imported_count, skipped_count, remapped_count)
+        self.layers_button.setToolTip(
+            "Choose which DXF layers are imported before thickness and 3D build.\n"
+            f"Current scope: {summary}. The left Layers panel only hides or shows imported layers."
+        )
+
     def _open_layer_setup(self) -> None:
         if self.document is None:
-            QMessageBox.information(self, "Layer Setup", "Import a DXF file first.")
+            QMessageBox.information(self, "Import Layers", "Import a DXF file first.")
             return
 
         dialog = LayerConfigDialog(
@@ -489,7 +600,7 @@ class MainWindow(QMainWindow):
 
         payload = dialog.result_payload()
         if not payload["enabled_layers"]:
-            QMessageBox.warning(self, "Layer Setup", "Select at least one enabled layer.")
+            QMessageBox.warning(self, "Import Layers", "Select at least one enabled layer.")
             return
 
         current_settings = self._current_layer_settings()
@@ -497,8 +608,23 @@ class MainWindow(QMainWindow):
             payload["enabled_layers"] == current_settings["enabled_layers"]
             and payload["layer_mapping_overrides"] == current_settings["layer_mapping_overrides"]
         ):
+            self._set_status_message(
+                "Import layer rules unchanged.",
+                stage="Layers",
+                tone="good",
+                file_name=self.document.path.name,
+            )
             return
 
+        imported_count, skipped_count, remapped_count = self._layer_setup_metrics(
+            self.document.layer_info,
+            set(payload["enabled_layers"]),
+            dict(payload["layer_mapping_overrides"]),
+        )
+        self._pending_layer_setup_message = (
+            "Import layers updated: "
+            f"{self._format_layer_setup_summary(imported_count, skipped_count, remapped_count)}."
+        )
         self._load_document(self.document.path, layer_settings=payload, preview_only=True)
 
     def _open_semantic_preset_manager(self) -> None:
@@ -512,8 +638,10 @@ class MainWindow(QMainWindow):
             return
 
         self.layer_semantic_store.replace_presets(updated_presets)
-        self.status_label.setText(
-            "Semantic presets updated. Re-import the DXF to apply changes to the current session."
+        self._set_status_message(
+            "Semantic presets updated. Re-import the DXF to apply changes to the current session.",
+            stage="Updated",
+            tone="good",
         )
 
     def _should_preserve_user_state(
@@ -607,6 +735,7 @@ class MainWindow(QMainWindow):
             return
 
         self.document.stack_preview_layer_meshes = []
+        self.model_preview.show_build_progress("Updating stacked preview...", value=None, maximum=None)
         self.model_preview.surface.placeholder.set_content("3D Preview", "Updating stacked preview")
         self.model_preview.surface.placeholder.set_action(None)
         self.model_preview.surface._stack.setCurrentWidget(self.model_preview.surface._placeholder_page)
@@ -634,6 +763,7 @@ class MainWindow(QMainWindow):
 
         self.document.stack_preview_assembly = assembly
         self.document.stack_preview_layer_meshes = list(layer_meshes) if isinstance(layer_meshes, list) else []
+        self.model_preview.hide_build_progress()
         self.model_preview.load_document(self.document)
 
         if self._layer_walkthrough_active:
@@ -643,7 +773,12 @@ class MainWindow(QMainWindow):
         if self.document is None:
             return
 
-        self.status_label.setText(f"{self.document.path.name} | stacked preview failed: {error_message}")
+        self._set_status_message(
+            f"Stacked preview failed: {error_message}",
+            stage="Warning",
+            tone="warn",
+        )
+        self.model_preview.hide_build_progress()
         if self._layer_walkthrough_active:
             QTimer.singleShot(0, self._advance_layer_walkthrough)
 
@@ -725,8 +860,10 @@ class MainWindow(QMainWindow):
         self._layer_walkthrough_index += 1
         if self._layer_walkthrough_index >= len(self._layer_walkthrough_queue):
             self._finish_layer_walkthrough()
-            self.status_label.setText(
-                f"{self.document.path.name} | layer thickness setup complete | generating 3D model..."
+            self._set_status_message(
+                "Layer thickness setup complete. Generating the 3D model.",
+                stage="Building",
+                tone="busy",
             )
             return
 
@@ -736,36 +873,55 @@ class MainWindow(QMainWindow):
         self.preview.load_document(self.document)
         self.layer_panel.load_document(self.document)
 
-        current = float(self.document.layer_thicknesses.get(layer_name, 0.2))
-        thickness, accepted = QInputDialog.getDouble(
-            self,
-            "Set layer thickness",
-            (
-                f"Layer {self._layer_walkthrough_index + 1}/{len(self._layer_walkthrough_queue)}\n"
-                f"Set thickness for {layer_name}"
-            ),
-            current,
-            0.0,
-            50.0,
-            3,
+        current = self._suggest_walkthrough_thickness(layer_name)
+        payload = self._prompt_thickness(
+            title="Set layer thickness",
+            headline=f"Layer {self._layer_walkthrough_index + 1}/{len(self._layer_walkthrough_queue)}: {layer_name}",
+            detail="Use a quick preset or type a value in millimeters. Clear removes any assigned thickness.",
+            current_value=current,
+            apply_to_remaining_label="Apply this thickness to the remaining layers in this walkthrough",
+            reject_text="Finish Now",
         )
-        if not accepted:
+        if payload is None:
             self._finish_layer_walkthrough()
-            self.status_label.setText(
-                f"{self.document.path.name} | layer setup canceled | generating 3D model..."
+            self._set_status_message(
+                "Layer setup canceled. Generating the 3D model with the current values.",
+                stage="Building",
+                tone="busy",
             )
             return
 
-        if thickness <= 0:
-            self.document.layer_thicknesses.pop(layer_name, None)
-        else:
-            self.document.layer_thicknesses[layer_name] = thickness
+        thickness = float(payload["thickness"])
+        apply_to_remaining = bool(payload["apply_to_remaining"])
+        self._set_layer_thickness_value(layer_name, thickness)
+
+        if apply_to_remaining:
+            remaining_layers = self._layer_walkthrough_queue[self._layer_walkthrough_index + 1 :]
+            for remaining_layer in remaining_layers:
+                self._set_layer_thickness_value(remaining_layer, thickness)
+            self.layer_panel.load_document(self.document)
+            self._finish_layer_walkthrough()
+            if thickness <= 0:
+                detail = f"Cleared thickness across {1 + len(remaining_layers)} layers. Generating the 3D model."
+            else:
+                detail = f"Applied {thickness:.3f} mm to {1 + len(remaining_layers)} layers. Generating the 3D model."
+            self._set_status_message(detail, stage="Building", tone="busy")
+            return
 
         self._rebuild_stack_preview()
         self.layer_panel.load_document(self.document)
-        self.status_label.setText(
-            f"{self.document.path.name} | layer {layer_name} -> {thickness:.3f} mm"
-        )
+        if thickness <= 0:
+            self._set_status_message(
+                f"Cleared thickness for layer {layer_name}.",
+                stage="Thickness",
+                tone="good",
+            )
+        else:
+            self._set_status_message(
+                f"Layer {layer_name} thickness set to {thickness:.3f} mm.",
+                stage="Thickness",
+                tone="good",
+            )
 
     def _handle_import_preview(self, file_path_str: str, preview: RawImportPreview) -> None:
         file_path = Path(file_path_str)
@@ -867,13 +1023,31 @@ class MainWindow(QMainWindow):
         populated_layers = [
             layer for layer in self.document.layer_info if layer.get("enabled", True) and layer.get("entity_count", 0) > 0
         ]
+        layer_setup_message = self._pending_layer_setup_message
+        self._pending_layer_setup_message = None
         if self._skip_next_walkthrough:
-            self.status_label.setText(
-                f"{file_path.name} | {len(populated_layers)} active layers ready | generating 3D model..."
+            detail = (
+                f"{layer_setup_message} Building the 3D model."
+                if layer_setup_message
+                else f"{len(populated_layers)} imported layers ready. Generating the 3D model."
+            )
+            self._set_status_message(
+                detail,
+                stage="Building",
+                tone="busy",
+                file_name=file_path.name,
             )
         else:
-            self.status_label.setText(
-                f"{file_path.name} | {len(populated_layers)} active layers ready | configure thickness layer by layer"
+            detail = (
+                f"{layer_setup_message} Thickness walkthrough is ready."
+                if layer_setup_message
+                else f"{len(populated_layers)} imported layers ready. Configure thickness layer by layer."
+            )
+            self._set_status_message(
+                detail,
+                stage="2D Ready",
+                tone="warn",
+                file_name=file_path.name,
             )
         self.progress.setRange(0, 100)
         self.progress.setValue(35)
@@ -881,6 +1055,7 @@ class MainWindow(QMainWindow):
         self.layer_panel.load_document(self.document)
         self.semantic_panel.load_document(self.document)
         self.model_preview.load_document(self.document)
+        self._refresh_layer_setup_button()
         if self._skip_next_walkthrough:
             self._skip_next_walkthrough = False
         else:
@@ -897,11 +1072,20 @@ class MainWindow(QMainWindow):
         completed_layers = int(progress_payload.get("completed_layers", 0))
         total_layers = max(int(progress_payload.get("total_layers", 0)), 1)
         layer_name = str(progress_payload.get("layer_name", ""))
+        self.document.note = f"Generating the stacked model from layer {completed_layers}/{total_layers}: {layer_name}."
         progress_value = 35 + int((completed_layers / total_layers) * 50)
         self.progress.setRange(0, 100)
         self.progress.setValue(min(progress_value, 90))
-        self.status_label.setText(
-            f"{file_path.name} | 3D layer {completed_layers}/{total_layers}: {layer_name}"
+        self._set_status_message(
+            f"3D layer {completed_layers}/{total_layers}: {layer_name}",
+            stage="Building",
+            tone="busy",
+            file_name=file_path.name,
+        )
+        self.model_preview.show_build_progress(
+            f"3D layer {completed_layers}/{total_layers}: {layer_name}",
+            value=min(progress_value, 90),
+            maximum=100,
         )
         self.model_preview.surface.placeholder.set_content(
             "3D Preview",
@@ -1002,29 +1186,44 @@ class MainWindow(QMainWindow):
             layer for layer in self.document.layer_info if layer.get("enabled", True) and layer.get("entity_count", 0) > 0
         ]
         mapped_layers = [layer for layer in populated_layers if layer.get("mapped_type")]
-        self.status_label.setText(
-            f"{file_path.name} | {len(populated_layers)} active layers | {len(mapped_layers)} mapped | "
-            "click shaded shapes to assign thickness"
+        self._set_status_message(
+            f"{len(populated_layers)} active layers, {len(mapped_layers)} mapped. Click shaded shapes to assign thickness.",
+            stage="Ready",
+            tone="good",
+            file_name=file_path.name,
         )
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self.import_button.setEnabled(True)
         self.layers_button.setEnabled(not self._layer_walkthrough_active)
+        self.model_preview.hide_build_progress()
         self._update_ui()
 
     def _handle_import_failure(self, file_path_str: str, error_message: str) -> None:
         file_path = Path(file_path_str)
+        self._pending_layer_setup_message = None
         if self.document is not None and self.document.path == file_path and self.document.raw_entities:
             QMessageBox.warning(self, "3D generation failed", error_message)
-            self.status_label.setText(f"{file_path.name} | 2D ready | 3D generation failed")
+            self._set_status_message(
+                "2D preview is ready, but 3D generation failed.",
+                stage="Warning",
+                tone="warn",
+                file_name=file_path.name,
+            )
         else:
             QMessageBox.critical(self, "Import failed", error_message)
-            self.status_label.setText(f"Import failed: {file_path.name}")
+            self._set_status_message(
+                "Import failed.",
+                stage="Error",
+                tone="error",
+                file_name=file_path.name,
+            )
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.import_button.setEnabled(True)
         self.layers_button.setEnabled(bool(self.document))
         self.export_button.setEnabled(self._has_exportable_outputs())
+        self.model_preview.hide_build_progress()
 
     def _finish_import_thread(self, *_args: object) -> None:
         if self._import_thread is not None:
@@ -1058,6 +1257,7 @@ class MainWindow(QMainWindow):
         self.layer_panel.load_document(self.document)
         self.semantic_panel.load_document(self.document)
         self.model_preview.load_document(self.document)
+        self._refresh_layer_setup_button()
         self._set_import_actions_enabled(self._import_thread is None)
         self.layers_button.setEnabled(
             self.document is not None and self._import_thread is None and not self._layer_walkthrough_active
@@ -1073,9 +1273,79 @@ class MainWindow(QMainWindow):
             )
         )
 
+    def _set_status_message(
+        self,
+        detail: str,
+        *,
+        stage: str,
+        tone: str = "neutral",
+        file_name: str | None = None,
+    ) -> None:
+        self.status_stage.setText(stage)
+        self.status_stage.setProperty("tone", tone)
+        self.status_stage.style().unpolish(self.status_stage)
+        self.status_stage.style().polish(self.status_stage)
+        if file_name is None:
+            file_name = self.document.path.name if self.document is not None else "No file"
+        self.status_file_label.setText(file_name)
+        self.status_label.setText(detail)
+
     def _set_import_actions_enabled(self, enabled: bool) -> None:
         self.preview.set_import_action_enabled(enabled)
         self.model_preview.set_import_action_enabled(enabled)
+
+    def _prompt_thickness(
+        self,
+        *,
+        title: str,
+        headline: str,
+        detail: str | None,
+        current_value: float,
+        apply_to_remaining_label: str | None = None,
+        reject_text: str = "Cancel",
+    ) -> dict[str, float | bool] | None:
+        dialog = LayerThicknessDialog(
+            title=title,
+            headline=headline,
+            detail=detail,
+            current_value=current_value,
+            apply_to_remaining_label=apply_to_remaining_label,
+            reject_text=reject_text,
+            parent=self,
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return None
+        return dialog.result_payload()
+
+    def _suggest_walkthrough_thickness(self, layer_name: str) -> float:
+        if self.document is None:
+            return 0.2
+        existing_value = self.document.layer_thicknesses.get(layer_name)
+        if existing_value is not None:
+            return float(existing_value)
+        if self._layer_walkthrough_index > 0:
+            previous_layers = self._layer_walkthrough_queue[: self._layer_walkthrough_index]
+            for previous_layer in reversed(previous_layers):
+                previous_value = self.document.layer_thicknesses.get(previous_layer)
+                if previous_value is not None:
+                    return float(previous_value)
+        return 0.2
+
+    def _set_layer_thickness_value(self, layer_name: str, thickness: float) -> None:
+        if self.document is None:
+            return
+        if thickness <= 0:
+            self.document.layer_thicknesses.pop(layer_name, None)
+        else:
+            self.document.layer_thicknesses[layer_name] = thickness
+
+    def _set_entity_thickness_value(self, entity_index: int, thickness: float) -> None:
+        if self.document is None:
+            return
+        if thickness <= 0:
+            self.document.entity_thicknesses.pop(entity_index, None)
+        else:
+            self.document.entity_thicknesses[entity_index] = thickness
 
     def _handle_preview_selection(self, entity_index: int | None) -> None:
         if self.document is None:
@@ -1090,11 +1360,17 @@ class MainWindow(QMainWindow):
         entity_type = entity["type"]
         thickness = self.document.entity_thicknesses.get(entity_index)
         if thickness is not None:
-            self.status_label.setText(
-                f"Selected {entity_type} on layer {layer_name} | thickness {thickness:.3f} mm"
+            self._set_status_message(
+                f"Selected {entity_type} on layer {layer_name} with thickness {thickness:.3f} mm.",
+                stage="Selected",
+                tone="busy",
             )
         else:
-            self.status_label.setText(f"Selected {entity_type} on layer {layer_name}")
+            self._set_status_message(
+                f"Selected {entity_type} on layer {layer_name}.",
+                stage="Selected",
+                tone="busy",
+            )
 
     def _handle_semantic_item_selected(self, payload: object) -> None:
         if self.document is None:
@@ -1139,11 +1415,17 @@ class MainWindow(QMainWindow):
         kind_label = getattr(semantic_item, "kind", "object")
         kind_label = str(kind_label).removesuffix("_candidate").replace("_", " ")
         if isinstance(layer_name, str) and layer_name:
-            self.status_label.setText(
-                f"Selected {kind_label} on layer {layer_name}"
+            self._set_status_message(
+                f"Selected {kind_label} on layer {layer_name}.",
+                stage="Selected",
+                tone="busy",
             )
         else:
-            self.status_label.setText(f"Selected {kind_label}")
+            self._set_status_message(
+                f"Selected {kind_label}.",
+                stage="Selected",
+                tone="busy",
+            )
 
     def _handle_review_override_requested(self, payload: object) -> None:
         if self.document is None or self.document.semantic_result is None:
@@ -1222,8 +1504,10 @@ class MainWindow(QMainWindow):
         self.semantic_panel.load_document(self.document)
         if selected_key and selected_item is not None:
             self._handle_semantic_item_selected({"key": selected_key, "item": selected_item})
-        self.status_label.setText(
-            f"Review item classified as {target_kind.replace('_', ' ')}"
+        self._set_status_message(
+            f"Review item classified as {target_kind.replace('_', ' ')}.",
+            stage="Updated",
+            tone="good",
         )
 
     def _configure_shape_thickness(self, entity_index: int) -> None:
@@ -1239,30 +1523,33 @@ class MainWindow(QMainWindow):
             return
 
         current = float(self.document.entity_thicknesses.get(entity_index, 0.2))
-        thickness, accepted = QInputDialog.getDouble(
-            self,
-            "Set thickness",
-            f"Thickness for {entity.get('layer', '0')} ({entity_type})",
-            current,
-            0.0,
-            50.0,
-            3,
+        payload = self._prompt_thickness(
+            title="Set thickness",
+            headline=f"Thickness for {entity.get('layer', '0')} ({entity_type})",
+            detail="Use a quick preset or type a value in millimeters.",
+            current_value=current,
         )
-        if not accepted:
+        if payload is None:
             return
 
-        if thickness <= 0:
-            self.document.entity_thicknesses.pop(entity_index, None)
-        else:
-            self.document.entity_thicknesses[entity_index] = thickness
+        thickness = float(payload["thickness"])
+        self._set_entity_thickness_value(entity_index, thickness)
 
         self._rebuild_stack_preview()
 
         layer_name = entity.get("layer", "0")
         if thickness <= 0:
-            self.status_label.setText(f"Cleared thickness for layer {layer_name}")
+            self._set_status_message(
+                f"Cleared entity thickness on layer {layer_name}.",
+                stage="Thickness",
+                tone="good",
+            )
         else:
-            self.status_label.setText(f"Thickness set: {layer_name} -> {thickness:.3f} mm")
+            self._set_status_message(
+                f"Entity thickness on layer {layer_name} set to {thickness:.3f} mm.",
+                stage="Thickness",
+                tone="good",
+            )
 
     def _handle_layer_visibility_changed(self, layer_name: str, visible: bool) -> None:
         if self.document is None:
@@ -1288,43 +1575,55 @@ class MainWindow(QMainWindow):
         self.document.selected_layer_name = normalized
         self.preview.load_document(self.document)
         if normalized is None:
-            self.status_label.setText(f"{self.document.path.name} | layer focus cleared")
+            self._set_status_message(
+                "Layer focus cleared.",
+                stage="Layers",
+            )
             return
 
         thickness = self.document.layer_thicknesses.get(normalized)
         if thickness is None:
-            self.status_label.setText(f"Layer selected: {normalized}")
+            self._set_status_message(
+                f"Layer selected: {normalized}.",
+                stage="Layers",
+            )
         else:
-            self.status_label.setText(f"Layer selected: {normalized} | thickness {thickness:.3f} mm")
+            self._set_status_message(
+                f"Layer selected: {normalized} with thickness {thickness:.3f} mm.",
+                stage="Layers",
+            )
 
     def _edit_layer_thickness(self, layer_name: str) -> None:
         if self.document is None:
             return
 
         current = float(self.document.layer_thicknesses.get(layer_name, 0.2))
-        thickness, accepted = QInputDialog.getDouble(
-            self,
-            "Set layer thickness",
-            f"Thickness for layer {layer_name}",
-            current,
-            0.0,
-            50.0,
-            3,
+        payload = self._prompt_thickness(
+            title="Set layer thickness",
+            headline=f"Thickness for layer {layer_name}",
+            detail="Use a quick preset or type a value in millimeters.",
+            current_value=current,
         )
-        if not accepted:
+        if payload is None:
             return
 
-        if thickness <= 0:
-            self.document.layer_thicknesses.pop(layer_name, None)
-        else:
-            self.document.layer_thicknesses[layer_name] = thickness
+        thickness = float(payload["thickness"])
+        self._set_layer_thickness_value(layer_name, thickness)
 
         self._rebuild_stack_preview()
         self.layer_panel.load_document(self.document)
         if thickness <= 0:
-            self.status_label.setText(f"Cleared thickness for layer {layer_name}")
+            self._set_status_message(
+                f"Cleared thickness for layer {layer_name}.",
+                stage="Thickness",
+                tone="good",
+            )
         else:
-            self.status_label.setText(f"Layer thickness set: {layer_name} -> {thickness:.3f} mm")
+            self._set_status_message(
+                f"Layer thickness set: {layer_name} -> {thickness:.3f} mm.",
+                stage="Thickness",
+                tone="good",
+            )
 
     def _export_coordinates(self) -> None:
         if self.document is None or self.document.assembly is None:
@@ -1344,7 +1643,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export coordinates", "Failed to write the coordinate file.")
             return
 
-        self.status_label.setText(f"Coordinates exported: {self.document.path.name}")
+        self._set_status_message(
+            "Coordinates exported successfully.",
+            stage="Exported",
+            tone="good",
+        )
 
     def _export_wire_production_files(self) -> None:
         if self.document is None:
@@ -1386,7 +1689,11 @@ class MainWindow(QMainWindow):
 
         self.output_directory = request.output_directory
         exported_paths = [str(path) for path in (result.wb1_path, result.xlsm_path) if path is not None]
-        self.status_label.setText(f"Wire production files exported: {request.base_name}")
+        self._set_status_message(
+            f"Wire production files exported: {request.base_name}.",
+            stage="Exported",
+            tone="good",
+        )
         QMessageBox.information(
             self,
             "Wire production export",
@@ -1412,4 +1719,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export STEP", "Failed to export the STEP model.")
             return
 
-        self.status_label.setText(f"STEP exported: {self.document.path.name}")
+        self._set_status_message(
+            "STEP model exported successfully.",
+            stage="Exported",
+            tone="good",
+        )
