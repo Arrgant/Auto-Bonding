@@ -90,6 +90,45 @@ def test_wire_production_exporter_reports_validation_issues(tmp_path):
     assert "XLSM template path is required for XLSM export." in issues
 
 
+def test_wire_production_exporter_rejects_invalid_windows_filename_characters(tmp_path):
+    template = WireRecipeTemplate(
+        template_id="demo",
+        name="Demo",
+        wb1_template_path=str(tmp_path / "sample.WB1"),
+    )
+
+    issues = WireProductionExporter().validate_export_request(
+        [_wire_geometry("W0001", (0.0, 0.0), (1.0, 0.0))],
+        template,
+        base_name='PART:01',
+        export_wb1=True,
+        export_xlsm=False,
+    )
+
+    assert "Base file name contains Windows-reserved characters: <>:\"/\\|?*" in issues
+
+
+def test_wire_production_exporter_rejects_non_ascii_wb1_base_name(tmp_path):
+    wb1_template = tmp_path / "sample.WB1"
+    wb1_template.write_text("0000,53414D504C452E5742310000,\nJ,\n0000,\n0002,\nQ\n", encoding="utf-8")
+
+    template = WireRecipeTemplate(
+        template_id="demo",
+        name="Demo",
+        wb1_template_path=str(wb1_template),
+    )
+
+    issues = WireProductionExporter().validate_export_request(
+        [_wire_geometry("W0001", (0.0, 0.0), (1.0, 0.0))],
+        template,
+        base_name="零件01",
+        export_wb1=True,
+        export_xlsm=False,
+    )
+
+    assert "WB1-compatible base file name must use ASCII characters only." in issues
+
+
 def _build_minimal_xlsm_template(path: Path) -> None:
     workbook_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">

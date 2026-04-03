@@ -184,8 +184,16 @@ def _replace_filename_header(line: str, output_name: str) -> str:
     tokens = [token for token in line.split(",") if token]
     if len(tokens) < 2 or tokens[0] != "0000":
         return line
-    filename_hex = output_name.encode("ascii", errors="ignore").hex().upper() + "0000"
+    filename_hex = _encode_filename_header_token(output_name)
     return f"{tokens[0]},{filename_hex},"
+
+
+def _encode_filename_header_token(output_name: str) -> str:
+    try:
+        encoded = output_name.encode("ascii", errors="strict")
+    except UnicodeEncodeError as exc:
+        raise ValueError("WB1 output name must be ASCII so the machine header can store it safely.") from exc
+    return encoded.hex().upper() + "0000"
 
 
 def _ensure_record_capacity(

@@ -372,6 +372,47 @@ def test_wb1_writer_preserves_explicit_zero_z_instead_of_falling_back_to_templat
     assert lines[3] == "0002,0001,000A,000A,000F,"
 
 
+def test_wb1_writer_rejects_non_ascii_output_name_for_machine_header(tmp_path):
+    template_path = tmp_path / "name-template.WB1"
+    template_path.write_text(
+        "\n".join(
+            [
+                "0000,4E414D452E5742310000,",
+                "J,",
+                "0000,0000,",
+                "0002,0000,",
+                "Q",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    template = WireRecipeTemplate(
+        template_id="name",
+        name="Name",
+        wb1_template_path=str(template_path),
+        wb1_field_map={"role_code": 0},
+    )
+
+    ordered_wires = [
+        OrderedWireRecord(
+            wire_id="W0500",
+            wire_seq=1,
+            group_no=1,
+            first_point_seq=1,
+            second_point_seq=2,
+            geometry=_wire_geometry("W0500", (0.0, 0.0), (1.0, 0.0)),
+        )
+    ]
+
+    try:
+        WB1Writer().render(ordered_wires, template, output_name="零件.WB1")
+    except ValueError as exc:
+        assert "ASCII" in str(exc)
+    else:
+        raise AssertionError("Expected non-ASCII WB1 output name to be rejected.")
+
+
 def _wire_geometry(
     wire_id: str,
     first_xy: tuple[float, float],
