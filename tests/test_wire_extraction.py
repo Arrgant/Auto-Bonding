@@ -4,6 +4,7 @@ import math
 
 from core.export import (
     WireOrderingConfig,
+    build_wire_merge_proposals,
     extract_wire_geometries,
     extract_wire_geometries_with_audit,
     format_wire_extraction_audit_report,
@@ -208,6 +209,40 @@ def test_extract_wire_geometries_with_audit_flags_same_role_merge_direction_conf
     ]
 
 
+def test_build_wire_merge_proposals_suggests_join_order_and_fragment_reversal():
+    raw_entities = [
+        {"type": "LINE", "start": (0.0, 0.0), "end": (10.0, 0.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (20.0, 0.0), "end": (10.0, 0.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (30.0, 0.0), "end": (40.0, 0.0), "layer": "06_wire"},
+        {"type": "LINE", "start": (40.0, 0.0), "end": (50.0, 0.0), "layer": "06_wire"},
+    ]
+    layer_info = [{"name": "06_wire", "mapped_type": "wire", "suggested_role": "wire"}]
+
+    _wires, audit = extract_wire_geometries_with_audit(raw_entities, layer_info)
+
+    assert [
+        (
+            proposal.source_wire_id,
+            proposal.target_wire_id,
+            proposal.action,
+            proposal.reverse_wire_ids,
+            proposal.source_endpoint_role,
+            proposal.target_endpoint_role,
+        )
+        for proposal in build_wire_merge_proposals(audit)
+    ] == [
+        (
+            "W0001",
+            "W0002",
+            "reverse_second_then_join",
+            ("W0002",),
+            "second",
+            "second",
+        ),
+        ("W0003", "W0004", "join_as_is", (), "second", "first"),
+    ]
+
+
 def test_format_wire_extraction_audit_report_lists_skips_and_conflicts_first():
     raw_entities = [
         {"type": "LINE", "start": (0.0, 0.0), "end": (10.0, 0.0), "layer": "06_wire"},
@@ -235,6 +270,10 @@ def test_format_wire_extraction_audit_report_lists_skips_and_conflicts_first():
         "Potential split-wire joins:\n"
         "- W0001(second) <-> W0003(second) @ (10.000000, 0.000000) [same_role_conflict]\n"
         "- W0004(second) <-> W0005(first) @ (110.000000, 0.000000) [continuous]\n"
+        "\n"
+        "Suggested merge actions:\n"
+        "- W0001 -> W0003 @ (10.000000, 0.000000) action=reverse_second_then_join reverse=W0003\n"
+        "- W0004 -> W0005 @ (110.000000, 0.000000) action=join_as_is reverse=none\n"
     )
 
 

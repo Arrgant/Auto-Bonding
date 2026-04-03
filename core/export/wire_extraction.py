@@ -12,6 +12,7 @@ from .wire_models import WireGeometry, WirePoint
 
 
 WireMergeEndpointAlignment = Literal["continuous", "same_role_conflict"]
+WireMergeAction = Literal["join_as_is", "reverse_first_then_join", "reverse_second_then_join"]
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,20 @@ class WireExtractionMergeCandidate:
     first_endpoint_role: str
     second_endpoint_role: str
     endpoint_alignment: WireMergeEndpointAlignment
+
+
+@dataclass(frozen=True)
+class WireExtractionMergeProposal:
+    """One suggested pairwise merge operation derived from audit candidates."""
+
+    source_wire_id: str
+    target_wire_id: str
+    shared_x: float
+    shared_y: float
+    action: WireMergeAction
+    reverse_wire_ids: tuple[str, ...]
+    source_endpoint_role: str
+    target_endpoint_role: str
 
 
 def extract_wire_geometries(
@@ -305,6 +320,23 @@ def format_wire_extraction_audit_report(audit: WireExtractionAudit) -> str:
     else:
         lines.append("- none")
 
+    lines.extend(["", "Suggested merge actions:"])
+    proposals = build_wire_merge_proposals(audit)
+    if proposals:
+        for proposal in proposals:
+            reverse_text = (
+                "none"
+                if not proposal.reverse_wire_ids
+                else ", ".join(proposal.reverse_wire_ids)
+            )
+            lines.append(
+                f"- {proposal.source_wire_id} -> {proposal.target_wire_id} "
+                f"@ ({proposal.shared_x:.6f}, {proposal.shared_y:.6f}) "
+                f"action={proposal.action} reverse={reverse_text}"
+            )
+    else:
+        lines.append("- none")
+
     return "\n".join(lines) + "\n"
 
 
@@ -320,6 +352,26 @@ def write_wire_extraction_audit_report(
     return target_path
 
 
+def build_wire_merge_proposals(
+    audit: WireExtractionAudit,
+) -> tuple[WireExtractionMergeProposal, ...]:
+    """Build deterministic pairwise merge suggestions without changing wire data."""
+
+    proposals: list[WireExtractionMergeProposal] = []
+    for candidate in sorted(
+        audit.merge_candidates,
+        key=lambda item: (
+            item.endpoint_alignment != "same_role_conflict",
+            item.first_wire_id,
+            item.second_wire_id,
+            item.shared_x,
+            item.shared_y,
+        ),
+    ):
+        proposals.append(_build_merge_proposal(candidate))
+    return tuple(proposals)
+
+
 def _merge_endpoint_alignment(
     first_role: str,
     second_role: str,
@@ -329,11 +381,62 @@ def _merge_endpoint_alignment(
     return "continuous"
 
 
+def _build_merge_proposal(
+    candidate: WireExtractionMergeCandidate,
+) -> WireExtractionMergeProposal:
+    if candidate.first_endpoint_role == "second" and candidate.second_endpoint_role == "first":
+        return WireExtractionMergeProposal(
+            source_wire_id=candidate.first_wire_id,
+            target_wire_id=candidate.second_wire_id,
+            shared_x=candidate.shared_x,
+            shared_y=candidate.shared_y,
+            action="join_as_is",
+            reverse_wire_ids=(),
+            source_endpoint_role=candidate.first_endpoint_role,
+            target_endpoint_role=candidate.second_endpoint_role,
+        )
+    if candidate.first_endpoint_role == "first" and candidate.second_endpoint_role == "second":
+        return WireExtractionMergeProposal(
+            source_wire_id=candidate.second_wire_id,
+            target_wire_id=candidate.first_wire_id,
+            shared_x=candidate.shared_x,
+            shared_y=candidate.shared_y,
+            action="join_as_is",
+            reverse_wire_ids=(),
+            source_endpoint_role=candidate.second_endpoint_role,
+            target_endpoint_role=candidate.first_endpoint_role,
+        )
+    if candidate.first_endpoint_role == "first" and candidate.second_endpoint_role == "first":
+        return WireExtractionMergeProposal(
+            source_wire_id=candidate.first_wire_id,
+            target_wire_id=candidate.second_wire_id,
+            shared_x=candidate.shared_x,
+            shared_y=candidate.shared_y,
+            action="reverse_first_then_join",
+            reverse_wire_ids=(candidate.first_wire_id,),
+            source_endpoint_role=candidate.first_endpoint_role,
+            target_endpoint_role=candidate.second_endpoint_role,
+        )
+    return WireExtractionMergeProposal(
+        source_wire_id=candidate.first_wire_id,
+        target_wire_id=candidate.second_wire_id,
+        shared_x=candidate.shared_x,
+        shared_y=candidate.shared_y,
+        action="reverse_second_then_join",
+        reverse_wire_ids=(candidate.second_wire_id,),
+        source_endpoint_role=candidate.first_endpoint_role,
+        target_endpoint_role=candidate.second_endpoint_role,
+    )
+
+
 __all__ = [
     "WireExtractionAudit",
     "WireExtractionMergeCandidate",
+    "WireExtractionMergeProposal",
     "WireExtractionSkippedEntity",
+    "WireMergeAction",
     "WireMergeEndpointAlignment",
+    "build_wire_merge_proposals",
     "extract_wire_geometries",
     "extract_wire_geometries_with_audit",
     "format_wire_extraction_audit_report",
